@@ -1,0 +1,75 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`buildReviewPayload normal COMMENT payload 1`] = `
+{
+  "fileComments": [
+    {
+      "body": 
+"Whole file
+
+<sub>🤖 review bot</sub>
+<!-- proxy-review-bot head=head-1 -->"
+,
+      "commitId": "head-1",
+      "path": "c.ts",
+    },
+  ],
+  "review": {
+    "body": 
+"The retry loop needs a backoff.
+
+<sub>🤖 review bot</sub>
+<!-- proxy-review-bot head=head-1 -->"
+,
+    "comments": [
+      {
+        "body": 
+"Right side
+
+<sub>🤖 review bot</sub>
+<!-- proxy-review-bot head=head-1 -->"
+,
+        "line": 3,
+        "path": "a.ts",
+        "side": "RIGHT",
+      },
+      {
+        "body": 
+"Left side
+
+<sub>🤖 review bot</sub>
+<!-- proxy-review-bot head=head-1 -->"
+,
+        "line": 9,
+        "path": "b.ts",
+        "side": "LEFT",
+      },
+    ],
+    "commitId": "head-1",
+    "event": "COMMENT",
+  },
+}
+`;
+
+exports[`buildReviewPayload folded mode → no inline comments, each one in the body with path:line 1`] = `
+{
+  "fileComments": [],
+  "review": {
+    "body": 
+"The retry loop needs a backoff.
+
+---
+
+**src/retry.ts:12**
+
+No delay between attempts.
+
+<sub>🤖 review bot</sub>
+<!-- proxy-review-bot head=head-1 -->"
+,
+    "comments": [],
+    "commitId": "head-1",
+    "event": "COMMENT",
+  },
+}
+`;

@@ -1,0 +1,23 @@
+{
+	"items": [
+		{
+			"draft": false,
+			"html_url": "https://github.com/cli/cli/pull/14816",
+			"number": 14816,
+			"pull_request": { "url": "https://api.github.com/repos/cli/cli/pulls/14816" },
+			"repository_url": "https://api.github.com/repos/cli/cli",
+			"title": "docs(auth): make --with-token scope hint match enforced scopes",
+			"user": { "login": "yunaremaia" }
+		},
+		{
+			"draft": false,
+			"html_url": "https://github.com/cli/cli/pull/14815",
+			"number": 14815,
+			"pull_request": { "url": "https://api.github.com/repos/cli/cli/pulls/14815" },
+			"repository_url": "https://api.github.com/repos/cli/cli",
+			"title": "fix(gh auth status): explain expired expiring tokens with `--no-refresh`",
+			"user": { "login": "babakks" }
+		}
+	],
+	"total_count": 28
+}

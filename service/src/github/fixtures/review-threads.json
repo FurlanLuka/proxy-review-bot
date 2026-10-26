@@ -1,0 +1,28 @@
+{
+	"data": {
+		"repository": {
+			"pullRequest": {
+				"reviewThreads": {
+					"nodes": [
+						{
+							"id": "PRRT_kwDODKw3uc6vu01F",
+							"isResolved": false,
+							"path": "internal/attachments/client.go",
+							"line": 74,
+							"comments": {
+								"nodes": [
+									{
+										"databaseId": 4363072349,
+										"body": "Is this _all_ the token types now, except for refresh tokens? Seems like it might just be better to remove the whole thing.",
+										"createdAt": "2026-10-23T18:41:21Z",
+										"author": { "login": "williammartin", "__typename": "User" }
+									}
+								]
+							}
+						}
+					]
+				}
+			}
+		}
+	}
+}

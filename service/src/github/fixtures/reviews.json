@@ -1,0 +1,37 @@
+[
+	[
+		{
+			"id": 5632655130,
+			"state": "COMMENTED",
+			"body": "<!-- ccr-overview-v2 -->\n\n### \ud83d\udfe2 Approval recommended\n\nThe narrow allowlist expansion has matching unit-test coverage, preserves existing negative checks, and has no unresolved findings.\n\n**No open iss",
+			"submitted_at": "2026-10-23T18:16:40Z",
+			"commit_id": "fa812ef2b1ab1240ca023b7a4b720cbeef7fbdcd",
+			"user": {
+				"login": "copilot-pull-request-reviewer[bot]",
+				"type": "Bot"
+			}
+		},
+		{
+			"id": 5632961408,
+			"state": "COMMENTED",
+			"body": "It might be worth checking whether this works with `ghs_` tokens: https://github.com/cli/cli/blob/fa812ef2b1ab1240ca023b7a4b720cbeef7fbdcd/internal/attachments/client.go#L91-L109\r\n\r\nI'm not sure that ",
+			"submitted_at": "2026-10-23T18:45:20Z",
+			"commit_id": "fa812ef2b1ab1240ca023b7a4b720cbeef7fbdcd",
+			"user": {
+				"login": "williammartin",
+				"type": "User"
+			}
+		},
+		{
+			"id": 5633437083,
+			"state": "APPROVED",
+			"body": "I'm approving and merging this and I'll address @williammartin comments in a follow up PR.",
+			"submitted_at": "2026-10-23T19:27:08Z",
+			"commit_id": "fa812ef2b1ab1240ca023b7a4b720cbeef7fbdcd",
+			"user": {
+				"login": "BagToad",
+				"type": "User"
+			}
+		}
+	]
+]

@@ -1,0 +1,24 @@
+{
+	"name": "proxy-review-bot-service",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"start": "bun src/main.ts",
+		"test": "bun test",
+		"typecheck": "tsc --noEmit",
+		"check": "biome check . && eslint . && tsc --noEmit",
+		"format": "biome check --write . && eslint --fix ."
+	},
+	"dependencies": {
+		"zod": "3"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.1.3",
+		"@stylistic/eslint-plugin": "^5.10.0",
+		"@types/bun": "^1.4.4",
+		"eslint": "8",
+		"typescript": "5.9",
+		"typescript-eslint": "^8.72.0"
+	}
+}

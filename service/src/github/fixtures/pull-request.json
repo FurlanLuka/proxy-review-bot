@@ -1,0 +1,14 @@
+{
+	"additions": 14,
+	"base": { "ref": "trunk" },
+	"deletions": 13,
+	"draft": false,
+	"head": { "sha": "fa812ef2b1ab1240ca023b7a4b720cbeef7fbdcd" },
+	"html_url": "https://github.com/cli/cli/pull/14804",
+	"merged": true,
+	"number": 14804,
+	"requested_reviewers": [],
+	"state": "closed",
+	"title": "Allow server to arbitrate which GitHub App installation tokens can attach files",
+	"user": { "login": "martinajir" }
+}

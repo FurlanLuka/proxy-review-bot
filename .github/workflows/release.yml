@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Test the service
+        working-directory: service
+        run: |
+          bun install --frozen-lockfile
+          bun run check
+          bun test
+
+      - name: Test the app
+        working-directory: app
+        run: swift test
+
+      - name: Build and zip the app
+        working-directory: app
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="$VERSION" ZIP_OUTPUT="$PWD/ProxyReviewBot_${VERSION}_macos_arm64.zip" scripts/build-app.sh
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" "app/ProxyReviewBot_${VERSION}_macos_arm64.zip" \
+            --title "$GITHUB_REF_NAME" --generate-notes

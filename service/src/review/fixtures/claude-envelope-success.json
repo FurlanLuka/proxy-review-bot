@@ -1,0 +1,13 @@
+{
+	"type": "result",
+	"subtype": "success",
+	"is_error": false,
+	"num_turns": 2,
+	"result": "{\"outcome\":\"nothing_new\",\"summary\":\"fixture run\",\"headRefOid\":\"abc\"}",
+	"structured_output": {
+		"outcome": "nothing_new",
+		"summary": "fixture run",
+		"headRefOid": "abc"
+	},
+	"terminal_reason": "completed"
+}
