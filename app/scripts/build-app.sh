@@ -4,7 +4,7 @@ set -euo pipefail
 app_directory="$(cd "$(dirname "$0")/.." && pwd)"
 service_source_directory="$(cd "$app_directory/../service" && pwd)"
 bun_executable="$(command -v bun || echo "$HOME/.bun/bin/bun")"
-version="${VERSION:-0.2.0}"
+version="${VERSION:-0.2.1}"
 bundle_directory="$app_directory/build/ProxyReviewBot.app"
 contents_directory="$bundle_directory/Contents"
 bundled_service_directory="$contents_directory/Resources/service"
