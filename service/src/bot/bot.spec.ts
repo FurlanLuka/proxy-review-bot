@@ -434,6 +434,233 @@ describe('stopping a running review', () => {
 	});
 });
 
+describe('starting queued reviews without waiting for the next poll', () => {
+	it('clicking Review starts the review right away, before the next tick', async () => {
+		const setup = setUp({ reviewMode: 'manual' });
+
+		setup.github.addPullRequest(7);
+		await setup.tickAndSettle();
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+
+		expect(setup.bot.requestReview(setup.statusOf(7)?.id ?? 0)).toBe('ok');
+
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+	});
+
+	it('a finished review frees its slot and the next queued PR starts without a tick', async () => {
+		const setup = setUp({ reviewMode: 'manual' });
+
+		for (const number of [7, 8, 9, 10]) {
+			setup.github.addPullRequest(number);
+		}
+
+		await setup.tickAndSettle();
+		setup.claude.reviewOutcomes.push(...[1, 2, 3, 4].map(() => draftedFor('head-1', 'comment')));
+
+		for (const number of [7, 8, 9, 10]) {
+			setup.bot.requestReview(setup.statusOf(number)?.id ?? 0);
+		}
+
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(4);
+		expect(new Set(setup.claude.reviewCalls).size).toBe(4);
+	});
+
+	it('clicking Retry starts the review right away, before the next tick', async () => {
+		const setup = setUp({ reviewMode: 'manual' });
+
+		setup.github.addPullRequest(7);
+		await setup.tickAndSettle();
+
+		const id = setup.statusOf(7)?.id ?? 0;
+
+		setup.dependencies.store.updatePullRequest(id, { status: 'needs_you' });
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+
+		expect(setup.bot.retry(id)).toBe('ok');
+
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+	});
+
+	it.each([
+		{
+			name: 'paused',
+			block: (setup: ReturnType<typeof setUp>) => setup.bot.setPaused(true),
+			unblock: (setup: ReturnType<typeof setUp>) => setup.bot.setPaused(false),
+		},
+		{
+			name: 'usage limited',
+			block: (setup: ReturnType<typeof setUp>) =>
+				setup.dependencies.store.setFlag('usage_limited_until', String(setup.clock.now + 60_000)),
+			unblock: (setup: ReturnType<typeof setUp>) => {
+				setup.clock.now += 61_000;
+			},
+		},
+		{
+			name: 'setup needed',
+			block: async (setup: ReturnType<typeof setUp>) => {
+				setup.readiness.status = 'setup_needed';
+				setup.clock.now += 11 * 60_000;
+				await setup.tickAndSettle();
+			},
+			unblock: (setup: ReturnType<typeof setUp>) => {
+				setup.readiness.status = 'ready';
+				setup.clock.now += 11 * 60_000;
+			},
+		},
+	])(
+		'$name → clicking Review queues without starting; it starts once that clears',
+		async ({ block, unblock }) => {
+			const setup = setUp({ reviewMode: 'manual' });
+
+			setup.github.addPullRequest(7);
+			await setup.tickAndSettle();
+			await block(setup);
+			setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+
+			expect(setup.bot.requestReview(setup.statusOf(7)?.id ?? 0)).toBe('ok');
+
+			await setup.settle();
+
+			expect(setup.claude.reviewCalls).toHaveLength(0);
+			expect(setup.statusOf(7)?.status).toBe('queued');
+
+			await unblock(setup);
+			await setup.tickAndSettle();
+
+			expect(setup.claude.reviewCalls).toHaveLength(1);
+			expect(setup.statusOf(7)?.status).toBe('draft_ready');
+		},
+	);
+
+	it('setup broken mid-run → nothing new starts until the re-check, which then runs both waiting PRs', async () => {
+		const setup = setUp({ reviewMode: 'manual' });
+		const draftGate = createGate();
+
+		for (const number of [7, 8, 9, 10]) {
+			setup.github.addPullRequest(number);
+		}
+
+		await setup.tickAndSettle();
+		setup.claude.reviewGatesByUrl.set(urlOf(8), draftGate.promise);
+		setup.claude.reviewGatesByUrl.set(urlOf(9), draftGate.promise);
+		setup.claude.reviewOutcomes.push(
+			{ kind: 'setup_broken', message: 'Not logged in' },
+			...[1, 2, 3, 4].map(() => draftedFor('head-1', 'comment')),
+		);
+
+		for (const number of [7, 8, 9, 10]) {
+			setup.bot.requestReview(setup.statusOf(number)?.id ?? 0);
+		}
+
+		await waitUntil(() => setup.bot.getState().readiness.status === 'checking');
+
+		expect(setup.statusOf(7)?.status).toBe('queued');
+
+		draftGate.open();
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(3);
+		expect(setup.statusOf(10)?.status).toBe('queued');
+
+		await setup.tickAndSettle();
+
+		expect(setup.bot.getState().readiness.status).toBe('ready');
+		expect(setup.claude.reviewCalls).toHaveLength(5);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+		expect(setup.statusOf(10)?.status).toBe('draft_ready');
+	});
+});
+
+describe('starting queued reviews: resume, failures and stale readiness', () => {
+	it('resuming starts reviews that were queued while paused, without a tick', async () => {
+		const setup = setUp({ reviewMode: 'manual' });
+
+		setup.github.addPullRequest(7);
+		await setup.tickAndSettle();
+		setup.bot.setPaused(true);
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.bot.requestReview(setup.statusOf(7)?.id ?? 0);
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(0);
+
+		setup.bot.setPaused(false);
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+	});
+
+	it('starting queued reviews throws → logged, and the click still succeeds', async () => {
+		const setup = setUp({ reviewMode: 'manual' });
+		const errors: string[] = [];
+
+		setup.github.addPullRequest(7);
+		await setup.tickAndSettle();
+
+		const id = setup.statusOf(7)?.id ?? 0;
+
+		setup.dependencies.logger.error = (event) => {
+			errors.push(event);
+		};
+
+		setup.dependencies.store.listPullRequests = () => {
+			throw new Error('database locked');
+		};
+
+		expect(setup.bot.requestReview(id)).toBe('ok');
+		expect(errors).toEqual(['queued_reviews_start_failed']);
+		expect(setup.claude.reviewCalls).toHaveLength(0);
+	});
+
+	it('a readiness check that started before setup broke cannot mark it ready again', async () => {
+		const setup = setUp({ reviewMode: 'manual' });
+		const reviewGate = createGate();
+		const readinessGate = createGate();
+		const runReadinessChecks = setup.dependencies.runReadinessChecks;
+
+		setup.github.addPullRequest(7);
+		await setup.tickAndSettle();
+		setup.claude.reviewGatesByUrl.set(urlOf(7), reviewGate.promise);
+		setup.claude.reviewOutcomes.push({ kind: 'setup_broken', message: 'Not logged in' });
+		setup.bot.requestReview(setup.statusOf(7)?.id ?? 0);
+
+		setup.dependencies.runReadinessChecks = async () => {
+			await readinessGate.promise;
+
+			return runReadinessChecks();
+		};
+
+		const staleCheck = setup.bot.recheckReadiness();
+
+		reviewGate.open();
+		await setup.settle();
+
+		expect(setup.bot.getState().readiness.status).toBe('checking');
+
+		readinessGate.open();
+		await staleCheck;
+
+		expect(setup.bot.getState().readiness.status).toBe('checking');
+
+		setup.dependencies.runReadinessChecks = runReadinessChecks;
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.tickAndSettle();
+
+		expect(setup.bot.getState().readiness.status).toBe('ready');
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+	});
+});
+
 describe('parallel reviews', () => {
 	it('four queued PRs → three review at once, the fourth starts when a slot frees up', async () => {
 		const setup = setUp({ reviewMode: 'auto' });
@@ -793,6 +1020,7 @@ describe('changes while a review is running', () => {
 
 		expect(setup.github.submissions).toEqual([]);
 		expect(setup.statusOf(7)?.status).toBe('queued');
+		expect(setup.claude.reviewCalls).toHaveLength(1);
 	});
 
 	it('Stop then Review again mid-run → no second run until the first ends, then exactly one review posted', async () => {
@@ -809,7 +1037,8 @@ describe('changes while a review is running', () => {
 		setup.gate.open();
 		await setup.settle();
 
-		expect(setup.github.submissions).toEqual([]);
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+		expect(setup.github.submissions).toHaveLength(1);
 
 		await setup.tickAndSettle();
 

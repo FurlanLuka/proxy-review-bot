@@ -48,6 +48,7 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 		isReplyJobRunning: false,
 		isSyncing: false,
 	};
+	const readinessGeneration = { current: 0 };
 	const runningJobs = new Set<Promise<void>>();
 	const reviewingIds = new Set<number>();
 	const reviewAborts = new Map<number, AbortController>();
@@ -64,7 +65,14 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 	};
 
 	const recheckReadiness = async (): Promise<void> => {
+		const generation = readinessGeneration.current;
 		const report = await dependencies.runReadinessChecks();
+
+		if (generation !== readinessGeneration.current) {
+			logger.info('readiness_check_discarded', { status: report.readiness.status });
+
+			return;
+		}
 
 		runtime.readiness = report.readiness;
 		runtime.viewerLogin = report.viewerLogin;
@@ -84,6 +92,8 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 		}
 
 		if (outcome?.kind === 'setup_broken') {
+			readinessGeneration.current += 1;
+			runtime.readiness = { ...runtime.readiness, status: 'checking' };
 			runtime.readinessCheckedAt = null;
 			logger.warn('setup_broken', { message: outcome.message });
 		}
@@ -101,8 +111,8 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 			.then(handleJobOutcome)
 			.catch((error: unknown) => logger.error('job_failed', { error }))
 			.finally(() => {
-				onSettled();
 				runningJobs.delete(tracked);
+				onSettled();
 			});
 
 		runningJobs.add(tracked);
@@ -126,6 +136,7 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 				reviewingIds.delete(tracked.id);
 				reviewAborts.delete(tracked.id);
 				reviewProgressById.delete(tracked.id);
+				startQueuedReviewsNow();
 			},
 		);
 	};
@@ -172,20 +183,36 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 		return progressById;
 	};
 
-	const startJobs = (viewerLogin: string): void => {
+	const canRunJobs = (): boolean => {
+		return runtime.readiness.status === 'ready' && !isPaused() && getUsageLimitedUntil() === null;
+	};
+
+	const startQueuedReviews = (viewerLogin: string): void => {
 		const freeSlots = MAX_PARALLEL_REVIEWS - reviewingIds.size;
 
 		for (const tracked of findQueued().slice(0, Math.max(0, freeSlots))) {
 			startReviewJob(tracked, viewerLogin);
 		}
+	};
+
+	const startQueuedReviewsNow = (): void => {
+		const viewerLogin = runtime.viewerLogin;
+
+		try {
+			if (viewerLogin !== null && canRunJobs()) {
+				startQueuedReviews(viewerLogin);
+			}
+		} catch (error) {
+			logger.error('queued_reviews_start_failed', { error });
+		}
+	};
+
+	const startJobs = (viewerLogin: string): void => {
+		startQueuedReviews(viewerLogin);
 
 		if (!runtime.isReplyJobRunning && settingsStore.get().answerQuestions) {
 			startReplyJob(viewerLogin);
 		}
-	};
-
-	const canRunJobs = (): boolean => {
-		return runtime.readiness.status === 'ready' && !isPaused() && getUsageLimitedUntil() === null;
 	};
 
 	const tick = async (): Promise<void> => {
@@ -287,18 +314,26 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 				progressById: buildProgressById(),
 				now: now(),
 			}),
-		requestReview: (id) =>
-			applyManualAction(id, {
+		requestReview: (id) => {
+			const result = applyManualAction(id, {
 				status: 'queued',
 				lastError: null,
 				nextEligibleAt: null,
 				pendingApproval: null,
-			}),
+			});
+
+			if (result === 'ok') {
+				startQueuedReviewsNow();
+			}
+
+			return result;
+		},
 		retry: (id) => {
 			const result = applyManualAction(id, { ...buildReviewCycleReset(now()), status: 'queued' });
 
 			if (result === 'ok') {
 				store.recordActivity(id, 'retry', {});
+				startQueuedReviewsNow();
 			}
 
 			return result;
@@ -314,6 +349,10 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 		setPaused: (shouldPause) => {
 			store.setFlag(PAUSED_FLAG, shouldPause ? 'true' : null);
 			logger.info('pause_changed', { isPaused: shouldPause });
+
+			if (!shouldPause) {
+				startQueuedReviewsNow();
+			}
 		},
 		recheckReadiness,
 	};

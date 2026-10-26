@@ -39,6 +39,7 @@ struct MenuContentView: View {
         }
         .padding(MenuStyle.outerPadding)
         .frame(width: MenuStyle.width)
+        .background(MenuWindowTopAnchor())
     }
 
     private var maximumScrollHeight: CGFloat {
