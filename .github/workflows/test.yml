@@ -1,0 +1,35 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  service:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Check and test
+        working-directory: service
+        run: |
+          bun install --frozen-lockfile
+          bun run check
+          bun test
+
+  app:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test
+        working-directory: app
+        run: swift test
+
+      - name: Check the installer
+        run: sh -n install.sh

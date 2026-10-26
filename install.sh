@@ -77,6 +77,10 @@ check_tools() {
     fi
 }
 
+json_value() {
+    printf '%s' "$1" | plutil -extract "$2" raw -o - - 2>/dev/null
+}
+
 download_release() {
     TOKEN="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null || true)}"
     [ -n "$TOKEN" ] || fail "Not logged in to GitHub. Run: gh auth login"
@@ -84,12 +88,22 @@ download_release() {
     RELEASE_JSON=$(curl -fsSL -H "Authorization: Bearer $TOKEN" \
         "https://api.github.com/repos/$REPO/releases/latest") || fail "Could not read the latest release of $REPO."
 
-    VERSION=$(printf '%s\n' "$RELEASE_JSON" | grep '"tag_name"' | head -1 | sed 's/.*"v//' | sed 's/".*//')
+    VERSION=$(json_value "$RELEASE_JSON" tag_name | sed 's/^v//')
     [ -n "$VERSION" ] || fail "Failed to determine the latest version."
 
     ASSET_NAME="ProxyReviewBot_${VERSION}_macos_arm64.zip"
-    ASSET_URL=$(printf '%s\n' "$RELEASE_JSON" | tr ',' '\n' \
-        | grep -B 3 "\"name\": *\"$ASSET_NAME\"" | grep '"url"' | head -1 | sed 's/.*"url": *"//' | sed 's/".*//')
+    ASSET_URL=""
+    INDEX=0
+
+    while NAME=$(json_value "$RELEASE_JSON" "assets.$INDEX.name"); do
+        if [ "$NAME" = "$ASSET_NAME" ]; then
+            ASSET_URL=$(json_value "$RELEASE_JSON" "assets.$INDEX.url")
+            break
+        fi
+
+        INDEX=$((INDEX + 1))
+    done
+
     [ -n "$ASSET_URL" ] || fail "Release v$VERSION has no $ASSET_NAME."
 
     say "Downloading Proxy Review Bot v$VERSION..."
