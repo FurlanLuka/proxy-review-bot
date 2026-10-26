@@ -1,7 +1,9 @@
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { RunCommand } from '../commands/run-command.js';
+import type { CommandResult, RunCommand } from '../commands/run-command.js';
 import type { Logger } from '../logging/logger.js';
+import { applyStreamLine, createReviewProgress } from '../review/review-progress.js';
+import type { ReviewProgress } from '../review/review-progress.js';
 import {
 	parseClaudeOutput,
 	REPLY_RESULT_JSON_SCHEMA,
@@ -20,6 +22,7 @@ const REPLY_TIMEOUT_MS = 5 * 60_000;
 interface RunReviewParams {
 	pullRequestUrl: string;
 	clonePath: string;
+	onProgress?: (progress: ReviewProgress) => void;
 }
 
 interface RunReplyParams {
@@ -71,6 +74,14 @@ interface CreateClaudeClientParams {
 	baseEnv: Record<string, string | undefined>;
 }
 
+interface RunClaudeParams<Result> {
+	kind: ClaudeJobKind;
+	args: string[];
+	clonePath: string;
+	parse: (output: CommandResult) => ClaudeRunOutcome<Result>;
+	onStdoutLine?: (line: string) => void;
+}
+
 export const createClaudeClient = ({
 	claudePath,
 	shimDirectory,
@@ -78,12 +89,13 @@ export const createClaudeClient = ({
 	logger,
 	baseEnv,
 }: CreateClaudeClientParams): ClaudeClient => {
-	const runClaude = async <Result>(
-		kind: ClaudeJobKind,
-		args: string[],
-		clonePath: string,
-		parse: (output: Awaited<ReturnType<RunCommand>>) => ClaudeRunOutcome<Result>,
-	): Promise<ClaudeRunOutcome<Result>> => {
+	const runClaude = async <Result>({
+		kind,
+		args,
+		clonePath,
+		parse,
+		onStdoutLine,
+	}: RunClaudeParams<Result>): Promise<ClaudeRunOutcome<Result>> => {
 		logger.info('claude_run_started', { kind, clonePath });
 		const output = await runCommand({
 			command: 'caffeinate',
@@ -91,6 +103,7 @@ export const createClaudeClient = ({
 			cwd: clonePath,
 			env: buildClaudeEnv({ baseEnv, shimDirectory }),
 			timeoutMs: kind === 'review' ? REVIEW_TIMEOUT_MS : REPLY_TIMEOUT_MS,
+			onStdoutLine,
 		});
 		const outcome = parse(output);
 
@@ -106,17 +119,32 @@ export const createClaudeClient = ({
 	};
 
 	return {
-		runReview: ({ pullRequestUrl, clonePath }) => {
+		runReview: ({ pullRequestUrl, clonePath, onProgress }) => {
 			const args = buildClaudeArgs({
 				kind: 'review',
 				prompt: buildReviewPrompt(pullRequestUrl),
 				systemPrompt: REVIEW_SYSTEM_PROMPT,
 				jsonSchema: REVIEW_RESULT_JSON_SCHEMA,
 			});
+			const progress = { current: createReviewProgress(Date.now(), 'Starting the review') };
 
-			return runClaude('review', args, clonePath, (output) =>
-				parseClaudeOutput({ output, schema: REVIEW_RESULT_SCHEMA, now: Date.now() }),
-			);
+			onProgress?.(progress.current);
+
+			return runClaude({
+				kind: 'review',
+				args,
+				clonePath,
+				parse: (output) =>
+					parseClaudeOutput({ output, schema: REVIEW_RESULT_SCHEMA, now: Date.now() }),
+				onStdoutLine: (line) => {
+					const next = applyStreamLine(progress.current, line, Date.now());
+
+					if (next !== progress.current) {
+						progress.current = next;
+						onProgress?.(next);
+					}
+				},
+			});
 		},
 		runReply: ({ prompt, clonePath }) => {
 			const args = buildClaudeArgs({
@@ -126,9 +154,13 @@ export const createClaudeClient = ({
 				jsonSchema: REPLY_RESULT_JSON_SCHEMA,
 			});
 
-			return runClaude('reply', args, clonePath, (output) =>
-				parseClaudeOutput({ output, schema: REPLY_RESULT_SCHEMA, now: Date.now() }),
-			);
+			return runClaude({
+				kind: 'reply',
+				args,
+				clonePath,
+				parse: (output) =>
+					parseClaudeOutput({ output, schema: REPLY_RESULT_SCHEMA, now: Date.now() }),
+			});
 		},
 	};
 };

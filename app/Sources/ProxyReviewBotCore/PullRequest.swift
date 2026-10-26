@@ -18,6 +18,8 @@ public struct PullRequest: Codable, Equatable, Identifiable, Sendable {
     public var reason: String?
     public var reviewStartedAt: Double?
     public var updatedAt: Double
+    public var progress: ReviewProgress?
+    public var draft: PullRequestDraftSummary?
 
     public var shortName: String {
         "\(repo) #\(number)"

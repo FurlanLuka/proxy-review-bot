@@ -15,6 +15,7 @@ import type {
 } from '../github/github-types.js';
 import { GitHubRequestError } from '../github/github-types.js';
 import { createSilentLogger } from '../logging/logger.js';
+import { applyStreamLine, createReviewProgress } from '../review/review-progress.js';
 import type { ClaudeRunOutcome, ReplyResult, ReviewResult } from '../review/review-result.js';
 import { createSettingsStore } from '../settings/settings.js';
 import { createStore } from '../tracking/store.js';
@@ -95,7 +96,12 @@ export const createFakeGitHub = (clock: { now: number }): FakeGitHub => {
 
 			entry?.reviews.push({
 				id: fake.submissions.length,
-				state: submission.event === 'APPROVE' ? 'APPROVED' : 'COMMENTED',
+				state:
+					submission.event === 'APPROVE'
+						? 'APPROVED'
+						: submission.event === 'REQUEST_CHANGES'
+							? 'CHANGES_REQUESTED'
+							: 'COMMENTED',
 				body: submission.body,
 				submittedAt: new Date(clock.now).toISOString(),
 				commitId: submission.commitId,
@@ -136,21 +142,54 @@ export interface FakeClaude extends ClaudeClient {
 	reviewCalls: string[];
 	replyPrompts: string[];
 	reviewGate: Promise<void> | null;
+	reviewProgressLines: string[];
+	replyEntered: Promise<void>;
+	waitForReviewCall: (count: number) => Promise<void>;
 	replyGate: Promise<void> | null;
 	replyError: Error | null;
 }
 
 export const createFakeClaude = (): FakeClaude => {
+	const reviewWaiters: { count: number; resolve: () => void }[] = [];
+	const replyEntered = Promise.withResolvers<void>();
+
+	const notifyReviewWaiters = (): void => {
+		for (const waiter of reviewWaiters.filter(({ count }) => fake.reviewCalls.length >= count)) {
+			waiter.resolve();
+		}
+	};
+
 	const fake: FakeClaude = {
+		replyEntered: replyEntered.promise,
+		waitForReviewCall: (count) => {
+			const waiter = Promise.withResolvers<void>();
+
+			reviewWaiters.push({ count, resolve: waiter.resolve });
+			notifyReviewWaiters();
+
+			return waiter.promise;
+		},
 		reviewOutcomes: [],
 		replyOutcomes: [],
 		reviewCalls: [],
 		replyPrompts: [],
 		reviewGate: null,
+		reviewProgressLines: [],
 		replyGate: null,
 		replyError: null,
-		runReview: async ({ pullRequestUrl }) => {
+		runReview: async ({ pullRequestUrl, onProgress }) => {
 			fake.reviewCalls.push(pullRequestUrl);
+
+			const progress = { current: createReviewProgress(0, 'Starting the review') };
+
+			onProgress?.(progress.current);
+
+			for (const line of fake.reviewProgressLines) {
+				progress.current = applyStreamLine(progress.current, line, 0);
+				onProgress?.(progress.current);
+			}
+
+			notifyReviewWaiters();
 
 			if (fake.reviewGate !== null) {
 				await fake.reviewGate;
@@ -160,6 +199,7 @@ export const createFakeClaude = (): FakeClaude => {
 		},
 		runReply: async ({ prompt }) => {
 			fake.replyPrompts.push(prompt);
+			replyEntered.resolve();
 
 			if (fake.replyGate !== null) {
 				await fake.replyGate;

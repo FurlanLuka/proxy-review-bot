@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
-import { checkReadiness } from './readiness.js';
+import { createSilentLogger } from '../logging/logger.js';
+import { checkReadiness, gatherReadinessFacts } from './readiness.js';
 import type { ReadinessFacts } from './readiness.js';
 
 const READY_FACTS: ReadinessFacts = {
@@ -71,5 +72,56 @@ describe('checkReadiness', () => {
 		};
 
 		expect(checkReadiness(facts).checks.filter((check) => !check.isOk)).toHaveLength(3);
+	});
+});
+
+describe('gatherReadinessFacts with broken tool paths', () => {
+	it('missing or non-executable paths → reported as missing, never thrown', async () => {
+		const facts = await gatherReadinessFacts({
+			runCommand: async () => {
+				throw new Error('should not spawn a missing tool');
+			},
+			claudePath: '/nonexistent/claude',
+			ghPath: '/etc/hosts',
+			gitPath: null,
+			env: {},
+			logger: createSilentLogger(),
+		});
+
+		expect(facts).toMatchObject({ claudePath: null, ghPath: null, gitPath: null, ghLogin: null });
+		expect(checkReadiness(facts).status).toBe('setup_needed');
+	});
+
+	it('a tool that fails to run → that check fails and is logged, the rest still gathered', async () => {
+		const warnings: unknown[] = [];
+		const facts = await gatherReadinessFacts({
+			runCommand: async ({ args }) => {
+				if (args[0] === 'auth') {
+					throw new Error('spawn failed');
+				}
+
+				return {
+					exitCode: 0,
+					stdout: args[0] === 'api' ? 'luka\n' : '[]',
+					stderr: '',
+					isTimedOut: false,
+					durationMs: 1,
+				};
+			},
+			claudePath: '/bin/sh',
+			ghPath: '/bin/sh',
+			gitPath: '/bin/sh',
+			env: {},
+			logger: {
+				...createSilentLogger(),
+				warn: (event, fields) => {
+					warnings.push({ event, check: fields?.check });
+				},
+			},
+		});
+
+		expect(facts.claudeAuth.isLoggedIn).toBe(false);
+		expect(facts.ghLogin).toBe('luka');
+		expect(warnings).toEqual([{ event: 'readiness_check_failed', check: 'claude_auth' }]);
 	});
 });

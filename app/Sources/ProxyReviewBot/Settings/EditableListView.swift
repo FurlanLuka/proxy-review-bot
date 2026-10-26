@@ -22,6 +22,7 @@ struct EditableListView: View {
                         }
                         .buttonStyle(.borderless)
                         .help("Remove \(entry)")
+                        .accessibilityLabel("Remove \(entry)")
                     }
                 }
 
@@ -35,6 +36,8 @@ struct EditableListView: View {
                     }
                     .buttonStyle(.borderless)
                     .disabled(trimmedNewEntry.isEmpty)
+                    .help("Add to \(title) list")
+                    .accessibilityLabel("Add to \(title) list")
                 }
             }
         }

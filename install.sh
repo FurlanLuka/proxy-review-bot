@@ -81,6 +81,19 @@ json_value() {
     printf '%s' "$1" | plutil -extract "$2" raw -o - - 2>/dev/null
 }
 
+find_asset_url() {
+    INDEX=0
+
+    while NAME=$(json_value "$1" "assets.$INDEX.name"); do
+        if [ "$NAME" = "$2" ]; then
+            json_value "$1" "assets.$INDEX.url"
+            return
+        fi
+
+        INDEX=$((INDEX + 1))
+    done
+}
+
 download_release() {
     TOKEN="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null || true)}"
     [ -n "$TOKEN" ] || fail "Not logged in to GitHub. Run: gh auth login"
@@ -92,17 +105,7 @@ download_release() {
     [ -n "$VERSION" ] || fail "Failed to determine the latest version."
 
     ASSET_NAME="ProxyReviewBot_${VERSION}_macos_arm64.zip"
-    ASSET_URL=""
-    INDEX=0
-
-    while NAME=$(json_value "$RELEASE_JSON" "assets.$INDEX.name"); do
-        if [ "$NAME" = "$ASSET_NAME" ]; then
-            ASSET_URL=$(json_value "$RELEASE_JSON" "assets.$INDEX.url")
-            break
-        fi
-
-        INDEX=$((INDEX + 1))
-    done
+    ASSET_URL=$(find_asset_url "$RELEASE_JSON" "$ASSET_NAME")
 
     [ -n "$ASSET_URL" ] || fail "Release v$VERSION has no $ASSET_NAME."
 
@@ -180,4 +183,4 @@ main() {
     say "If the menu says Setup needed, it lists the command that fixes each item."
 }
 
-main "$@"
+[ -n "$PRB_SOURCE_ONLY" ] || main "$@"

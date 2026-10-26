@@ -2,22 +2,16 @@ import ProxyReviewBotCore
 import SwiftUI
 
 struct SettingsView: View {
+    private static let saveDelay = Duration.milliseconds(500)
+
     @ObservedObject var model: BotModel
     @State private var draft: BotSettings?
-    @State private var isSaving = false
     @State private var errorMessage: String?
 
     var body: some View {
         Group {
-            if let draft = Binding($draft), let savedSettings = model.state?.settings {
-                VStack(spacing: 0) {
-                    SettingsFormView(settings: draft, readiness: model.state?.readiness)
-
-                    Divider()
-
-                    actionBar(isChanged: draft.wrappedValue != savedSettings, savedSettings: savedSettings)
-                        .padding(12)
-                }
+            if let draft = Binding($draft) {
+                SettingsFormView(model: model, settings: draft, readiness: model.state?.readiness, errorMessage: errorMessage)
             } else {
                 Text("Waiting for the service…")
                     .foregroundStyle(.secondary)
@@ -31,29 +25,8 @@ struct SettingsView: View {
                 draft = newSettings
             }
         }
-    }
-
-    private func actionBar(isChanged: Bool, savedSettings: BotSettings) -> some View {
-        HStack {
-            if let errorMessage {
-                Text(errorMessage)
-                    .foregroundStyle(.red)
-                    .font(.callout)
-            }
-
-            Spacer()
-
-            Button("Revert") {
-                draft = savedSettings
-                errorMessage = nil
-            }
-            .disabled(!isChanged || isSaving)
-
-            Button("Save") {
-                save()
-            }
-            .keyboardShortcut(.defaultAction)
-            .disabled(!isChanged || isSaving)
+        .task(id: draft) {
+            await saveAfterDelay()
         }
     }
 
@@ -63,25 +36,30 @@ struct SettingsView: View {
         }
     }
 
-    private func save() {
-        guard let draft else {
+    private func saveAfterDelay() async {
+        guard let draft, draft != model.state?.settings else {
             return
         }
 
-        isSaving = true
+        do {
+            try await Task.sleep(for: Self.saveDelay)
+            try await model.saveSettings(draft)
 
-        Task {
-            do {
-                try await model.saveSettings(draft)
+            if self.draft == draft {
                 self.draft = model.state?.settings
-                errorMessage = nil
-            } catch {
-                errorMessage = (error as? ServiceClientError)?.code == "invalid_settings"
-                    ? "The service rejected these settings"
-                    : error.localizedDescription
             }
 
-            isSaving = false
+            errorMessage = nil
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled else {
+                return
+            }
+
+            errorMessage = (error as? ServiceClientError)?.code == "invalid_settings"
+                ? "The service rejected these settings"
+                : error.localizedDescription
         }
     }
 }

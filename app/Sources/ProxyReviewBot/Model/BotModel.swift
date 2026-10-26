@@ -5,6 +5,7 @@ import ProxyReviewBotCore
 @MainActor
 final class BotModel: ObservableObject {
     private static let pollIntervalSeconds: Double = 3
+    private static let serviceExitTimeoutSeconds: Double = 5
 
     @Published private(set) var state: BotState?
     @Published private(set) var connection: ServiceConnection = .starting
@@ -38,6 +39,15 @@ final class BotModel: ObservableObject {
         serviceProcess.stop()
     }
 
+    func shutDownAndWaitForServiceExit() async -> Bool {
+        pollingTask?.cancel()
+        return await serviceProcess.stopAndWaitForExit(timeoutSeconds: Self.serviceExitTimeoutSeconds)
+    }
+
+    func pullRequest(id: Int) -> PullRequest? {
+        state?.pullRequests.first { $0.id == id }
+    }
+
     func review(_ pullRequest: PullRequest) {
         perform(.review(pullRequestID: pullRequest.id), on: pullRequest)
     }
@@ -67,19 +77,40 @@ final class BotModel: ObservableObject {
     }
 
     func saveSettings(_ settings: BotSettings) async throws {
-        guard let client else {
-            throw ServiceClientError.invalidResponse
-        }
-
-        let savedSettings = try await client.saveSettings(settings)
+        let savedSettings = try await connectedClient().saveSettings(settings)
         state?.settings = savedSettings
         await refresh()
     }
 
+    func fetchDraft(pullRequestID: Int) async throws -> ReviewDraft {
+        try await connectedClient().fetchDraft(pullRequestID: pullRequestID)
+    }
+
+    func postDraft(_ request: ReviewPostRequest, pullRequestID: Int) async throws {
+        try await performAndRefresh(.postDraft(pullRequestID: pullRequestID, request: request))
+    }
+
+    func discardDraft(pullRequestID: Int) async throws {
+        try await performAndRefresh(.discardDraft(pullRequestID: pullRequestID))
+    }
+
     func openLogs() {
-        let logsDirectory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/ProxyReviewBot")
-        try? FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
-        NSWorkspace.shared.open(logsDirectory)
+        let logDirectory = InstallLocations().logDirectory
+        try? FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(logDirectory)
+    }
+
+    private func connectedClient() throws -> ServiceClient {
+        guard let client else {
+            throw ServiceClientError.notConnected
+        }
+
+        return client
+    }
+
+    private func performAndRefresh(_ action: ServiceAction) async throws {
+        try await connectedClient().perform(action)
+        await refresh()
     }
 
     private func connect(port: Int) {
@@ -144,17 +175,6 @@ final class BotModel: ObservableObject {
     }
 
     private static func message(for error: Error, pullRequest: PullRequest?) -> String {
-        let name = pullRequest?.shortName ?? "That"
-
-        switch error as? ServiceClientError {
-        case .failed(_, "head_moved"):
-            return "\(name) has new commits, review queued again"
-        case .failed(_, "not_awaiting_approval"):
-            return "\(name) is no longer awaiting approval"
-        case .failed(404, _):
-            return "\(name) is no longer tracked"
-        default:
-            return error.localizedDescription
-        }
+        ServiceClientError.message(for: error, subject: pullRequest?.shortName ?? "this PR")
     }
 }

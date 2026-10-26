@@ -1,7 +1,8 @@
 import { buildReviewCycleReset } from '../review/pull-request-updates.js';
+import type { ReviewProgress } from '../review/review-progress.js';
 import type { PullRequestUpdate, TrackedPullRequest } from '../tracking/tracking-types.js';
-import { approvePullRequest } from './approval.js';
-import type { ActionResult } from './approval.js';
+import { approvePullRequest, discardDraft, findHeldDraft, postEditedDraft } from './approval.js';
+import type { ActionResult, DraftPostResult, HeldDraft } from './approval.js';
 import type { BotDependencies, BotRuntime } from './bot-context.js';
 import { runNextReplyJob } from './reply-job.js';
 import { runReviewJob } from './review-job.js';
@@ -22,6 +23,9 @@ export interface Bot {
 	retry(id: number): ActionResult;
 	stop(id: number): ActionResult;
 	approve(id: number): Promise<ActionResult>;
+	getDraft(id: number): HeldDraft | 'not_found' | 'no_draft';
+	postDraft(id: number, edit: unknown): Promise<DraftPostResult>;
+	discardDraft(id: number): ActionResult;
 	setPaused(isPaused: boolean): void;
 	recheckReadiness(): Promise<void>;
 }
@@ -37,6 +41,7 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 	};
 	const jobs = { current: Promise.resolve() };
 	const approvingIds = new Set<number>();
+	const progressById = new Map<number, ReviewProgress>();
 
 	const isPaused = (): boolean => store.getFlag(PAUSED_FLAG) === 'true';
 
@@ -82,14 +87,27 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 
 		if (nextQueued !== undefined) {
 			handleJobOutcome(
-				await runReviewJob({ dependencies, tracked: nextQueued, viewerLogin, isPaused }),
+				await runReviewJob({
+					dependencies,
+					tracked: nextQueued,
+					viewerLogin,
+					isPaused,
+					onProgress: (progress) => progressById.set(nextQueued.id, progress),
+				}),
 			);
 
 			return;
 		}
 
 		if (settingsStore.get().answerQuestions) {
-			handleJobOutcome(await runNextReplyJob({ dependencies, viewerLogin, isPaused }));
+			handleJobOutcome(
+				await runNextReplyJob({
+					dependencies,
+					viewerLogin,
+					isPaused,
+					onProgress: (id, progress) => progressById.set(id, progress),
+				}),
+			);
 		}
 	};
 
@@ -98,6 +116,7 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 		jobs.current = runNextJob(viewerLogin)
 			.catch((error: unknown) => logger.error('job_failed', { error }))
 			.finally(() => {
+				progressById.clear();
 				runtime.isJobRunning = false;
 			});
 	};
@@ -165,18 +184,28 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 		return 'ok';
 	};
 
-	const approve = async (id: number): Promise<ActionResult> => {
+	const withPostingGuard = async <Result>(
+		id: number,
+		busyResult: Result,
+		post: () => Promise<Result>,
+	): Promise<Result> => {
 		if (approvingIds.has(id)) {
-			return 'busy';
+			return busyResult;
 		}
 
 		approvingIds.add(id);
 
 		try {
-			return await approvePullRequest({ dependencies, id, viewerLogin: runtime.viewerLogin });
+			return await post();
 		} finally {
 			approvingIds.delete(id);
 		}
+	};
+
+	const approve = (id: number): Promise<ActionResult> => {
+		return withPostingGuard<ActionResult>(id, 'busy', () =>
+			approvePullRequest({ dependencies, id, viewerLogin: runtime.viewerLogin }),
+		);
 	};
 
 	return {
@@ -192,13 +221,25 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 				usageLimitedUntil: getUsageLimitedUntil(),
 				readiness: runtime.readiness,
 				settings: settingsStore.get(),
+				progressById,
 				now: now(),
 			}),
 		requestReview: (id) =>
-			applyManualAction(id, { status: 'queued', lastError: null, nextEligibleAt: null }),
+			applyManualAction(id, {
+				status: 'queued',
+				lastError: null,
+				nextEligibleAt: null,
+				pendingApproval: null,
+			}),
 		retry: (id) => applyManualAction(id, { ...buildReviewCycleReset(now()), status: 'queued' }),
 		stop: (id) => applyManualAction(id, { status: 'stopped', pendingApproval: null }),
 		approve,
+		getDraft: (id) => findHeldDraft(dependencies, id),
+		postDraft: (id, edit) =>
+			withPostingGuard<DraftPostResult>(id, { result: 'busy' }, () =>
+				postEditedDraft({ dependencies, id, viewerLogin: runtime.viewerLogin, edit }),
+			),
+		discardDraft: (id) => (approvingIds.has(id) ? 'busy' : discardDraft({ dependencies, id })),
 		setPaused: (shouldPause) => {
 			store.setFlag(PAUSED_FLAG, shouldPause ? 'true' : null);
 			logger.info('pause_changed', { isPaused: shouldPause });

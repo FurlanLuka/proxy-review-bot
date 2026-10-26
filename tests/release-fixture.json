@@ -1,0 +1,9 @@
+{
+  "tag_name": "v0.2.0",
+  "name": null,
+  "body": null,
+  "assets": [
+    { "name": "checksums.txt", "label": null, "url": "https://api.github.com/repos/FurlanLuka/proxy-review-bot/releases/assets/1" },
+    { "name": "ProxyReviewBot_0.2.0_macos_arm64.zip", "label": null, "url": "https://api.github.com/repos/FurlanLuka/proxy-review-bot/releases/assets/2" }
+  ]
+}

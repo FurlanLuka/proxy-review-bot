@@ -18,6 +18,7 @@ final class ServiceProcess {
     private var launchedAt = Date()
     private var restartDelaySeconds: Double = 1
     private var isStopping = false
+    private var exitWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
 
     init(token: String) {
         self.token = token
@@ -46,6 +47,29 @@ final class ServiceProcess {
 
         Logger.service.info("Stopping service (pid \(process.processIdentifier))")
         process.terminate()
+    }
+
+    func stopAndWaitForExit(timeoutSeconds: Double) async -> Bool {
+        stop()
+
+        guard let process, process.isRunning else {
+            return true
+        }
+
+        let waiterID = UUID()
+
+        return await withCheckedContinuation { continuation in
+            exitWaiters[waiterID] = continuation
+
+            Task {
+                try? await Task.sleep(for: .seconds(timeoutSeconds))
+                resumeExitWaiter(waiterID, hasExited: false)
+            }
+        }
+    }
+
+    private func resumeExitWaiter(_ waiterID: UUID, hasExited: Bool) {
+        exitWaiters.removeValue(forKey: waiterID)?.resume(returning: hasExited)
     }
 
     private func launch() {
@@ -118,6 +142,10 @@ final class ServiceProcess {
         process = nil
         standardInputPipe = nil
         Logger.service.info("Service exited with status \(finishedProcess.terminationStatus)")
+
+        for waiterID in exitWaiters.keys {
+            resumeExitWaiter(waiterID, hasExited: true)
+        }
 
         guard !isStopping else {
             return

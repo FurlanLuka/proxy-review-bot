@@ -1,4 +1,8 @@
-import type { FileCommentSubmission, ReviewSubmission } from '../github/github-types.js';
+import type {
+	FileCommentSubmission,
+	ReviewEvent,
+	ReviewSubmission,
+} from '../github/github-types.js';
 import { appendBotFooter } from './bot-marker.js';
 import type { DraftedReviewResult } from './review-result.js';
 
@@ -11,7 +15,7 @@ export interface ReviewPayload {
 
 interface BuildReviewPayloadParams {
 	draft: DraftedReviewResult;
-	event: 'COMMENT' | 'APPROVE';
+	event: ReviewEvent;
 	headSha: string;
 	shouldFoldInlineComments: boolean;
 }

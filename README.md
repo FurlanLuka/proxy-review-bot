@@ -5,7 +5,7 @@ A local macOS menu bar bot that reviews GitHub pull requests where you are perso
 - `service/`: a Bun + TypeScript service. It polls GitHub, runs reviews, posts them, and serves the local API in [docs/service-api.md](docs/service-api.md).
 - `app/`: a SwiftUI menu bar app. It starts and supervises the service, lists what needs you, and holds the settings.
 
-![Menu](docs/screenshots/menu.png)
+![Menu](docs/screenshots/final/dark/menu.png)
 
 ## Requirements
 
@@ -79,6 +79,11 @@ curl -H 'Authorization: Bearer dev' http://127.0.0.1:<port>/state
 ## Safety defaults
 
 - **First launch is manual mode.** Nothing is reviewed until you click **Review**, or switch to Auto in Settings.
+- **In manual mode nothing posts without you.**
+  - A finished review becomes a draft (**Needs you → Review draft**).
+  - You can edit the main comment and each inline comment, drop the ones you don't want, then post, approve or discard.
+  - If the author pushes while the draft waits, the draft is dropped and the new commits get reviewed.
+- **In auto mode, comment reviews post on their own.** Approvals still follow the auto-approve setting.
 - **Auto-approve is off by default.** Approvals wait for your click in the menu, and the bot re-checks that the PR head hasn't moved before approving.
 - **Claude runs read-only.** It runs with `--setting-sources user`, and its tools are limited to reading and subagents. `gh` and `git` are replaced by guards that block every write (`service/src/claude/command-guard.ts`), so only the service itself posts.
 - **Bot posts are marked.** Each one carries a "🤖 review bot" line and a hidden `<!-- proxy-review-bot head=<sha> -->` marker. The marker is used to avoid posting twice and to tell the bot's threads from yours.

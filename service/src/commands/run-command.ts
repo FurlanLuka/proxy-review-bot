@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 
 export interface CommandResult {
 	exitCode: number | null;
@@ -15,6 +16,7 @@ export interface RunCommandParams {
 	env?: Record<string, string | undefined>;
 	input?: string;
 	timeoutMs?: number;
+	onStdoutLine?: (line: string) => void;
 }
 
 export type RunCommand = (params: RunCommandParams) => Promise<CommandResult>;
@@ -41,7 +43,15 @@ export const killRunningCommands = (): void => {
 	}
 };
 
-export const runCommand: RunCommand = ({ command, args, cwd, env, input, timeoutMs }) => {
+export const runCommand: RunCommand = ({
+	command,
+	args,
+	cwd,
+	env,
+	input,
+	timeoutMs,
+	onStdoutLine,
+}) => {
 	const startedAt = performance.now();
 
 	return new Promise((resolve, reject) => {
@@ -65,7 +75,32 @@ export const runCommand: RunCommand = ({ command, args, cwd, env, input, timeout
 			killProcessGroup(child.pid);
 		}, timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
-		child.stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
+		const lineBuffer = { pending: '' };
+		const decoder = new StringDecoder('utf8');
+
+		const emitLine = (line: string): void => {
+			try {
+				onStdoutLine?.(line);
+			} catch {
+				// A broken progress listener must not take the command down.
+			}
+		};
+
+		child.stdout.on('data', (chunk: Buffer) => {
+			stdoutChunks.push(chunk);
+
+			if (onStdoutLine === undefined) {
+				return;
+			}
+
+			const lines = (lineBuffer.pending + decoder.write(chunk)).split('\n');
+
+			lineBuffer.pending = lines.pop() ?? '';
+
+			for (const line of lines) {
+				emitLine(line);
+			}
+		});
 		child.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
 		child.on('error', (error) => {
 			clearTimeout(timer);
@@ -74,6 +109,13 @@ export const runCommand: RunCommand = ({ command, args, cwd, env, input, timeout
 		});
 		child.on('close', (exitCode) => {
 			clearTimeout(timer);
+
+			const remainder = lineBuffer.pending + decoder.end();
+
+			if (onStdoutLine !== undefined && remainder.length > 0) {
+				emitLine(remainder);
+			}
+
 			runningProcessIds.delete(processId ?? -1);
 			resolve({
 				exitCode,

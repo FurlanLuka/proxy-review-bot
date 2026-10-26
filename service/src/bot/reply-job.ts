@@ -2,6 +2,8 @@ import { buildReplyPrompt } from '../claude/prompts.js';
 import type { ReviewThread, ReviewThreadComment } from '../github/github-types.js';
 import { findUnansweredComment } from '../replies/reply-decisions.js';
 import { appendBotFooter } from '../review/bot-marker.js';
+import { createReviewProgress } from '../review/review-progress.js';
+import type { ReviewProgress } from '../review/review-progress.js';
 import type { TrackedPullRequest } from '../tracking/tracking-types.js';
 import type { BotDependencies } from './bot-context.js';
 import type { JobOutcome } from './review-job.js';
@@ -9,6 +11,7 @@ import type { JobOutcome } from './review-job.js';
 const REPLY_STATUSES = new Set([
 	'waiting_on_author',
 	'awaiting_approval',
+	'draft_ready',
 	'blocked',
 	'needs_review',
 ]);
@@ -23,6 +26,7 @@ interface ReplyJobParams {
 	dependencies: BotDependencies;
 	viewerLogin: string;
 	isPaused: () => boolean;
+	onProgress?: (id: number, progress: ReviewProgress) => void;
 }
 
 const isReplyStillWanted = ({ dependencies, isPaused }: ReplyJobParams, id: number): boolean => {
@@ -80,6 +84,10 @@ export const runNextReplyJob = async (params: ReplyJobParams): Promise<JobOutcom
 	const headSha = tracked.headSha ?? '';
 
 	logger.info('reply_job_started', { id: tracked.id, commentId: comment.databaseId });
+	params.onProgress?.(
+		tracked.id,
+		createReviewProgress(now(), `Answering @${comment.authorLogin} on ${thread.path}`),
+	);
 
 	try {
 		const clonePath = await clones.prepareClone(tracked);

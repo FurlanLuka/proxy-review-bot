@@ -12,9 +12,7 @@ struct LaunchAtLoginToggle: View {
             Toggle("Launch at login", isOn: Binding(get: { isEnabled }, set: update))
 
             if let errorMessage {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.red)
+                SettingsErrorText(message: errorMessage)
             }
         }
     }

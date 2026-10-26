@@ -99,6 +99,7 @@ const bot = createBot({
 	runReadinessChecks: async () => {
 		const facts = await gatherReadinessFacts({
 			runCommand,
+			logger,
 			claudePath,
 			ghPath,
 			gitPath,

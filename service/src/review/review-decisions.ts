@@ -1,13 +1,20 @@
 import type { LivePullRequest } from '../github/github-types.js';
 import type { MyReviewState } from '../github/github-parsers.js';
 import type { Settings } from '../settings/settings.js';
-import { TERMINAL_STATUSES } from '../tracking/tracking-types.js';
+import { DRAFT_HOLDING_STATUSES, TERMINAL_STATUSES } from '../tracking/tracking-types.js';
 import type { TrackedPullRequest } from '../tracking/tracking-types.js';
 import type { DraftedReviewResult, ReviewResult } from './review-result.js';
 
 export const QUIET_PERIOD_MS = 5 * 60_000;
 export const MAX_ATTEMPTS_PER_HEAD = 2;
 export const RETRY_BACKOFF_MS = 10 * 60_000;
+
+const BLOCK_REASON_TEXT = {
+	snapshot_unstable: 'PR kept changing',
+	diff_mismatch: "Diff didn't match GitHub",
+	missing_access: 'No access',
+	other: 'Stopped',
+} as const;
 
 export type PullRequestAction =
 	| { kind: 'none' }
@@ -78,7 +85,7 @@ export const decidePullRequestAction = ({
 		return NONE;
 	}
 
-	if (tracked.status === 'awaiting_approval') {
+	if (DRAFT_HOLDING_STATUSES.has(tracked.status)) {
 		return { kind: 'clear_approval' };
 	}
 
@@ -117,14 +124,15 @@ export type PostingAction =
 	| { kind: 'block'; summary: string }
 	| { kind: 'fail'; summary: string }
 	| { kind: 'post'; event: 'COMMENT' | 'APPROVE'; draft: DraftedReviewResult }
-	| { kind: 'await_approval'; draft: DraftedReviewResult };
+	| { kind: 'await_approval'; draft: DraftedReviewResult }
+	| { kind: 'hold_draft'; draft: DraftedReviewResult };
 
 interface DecidePostingActionParams {
 	result: ReviewResult;
 	jobHeadSha: string;
 	jobBaseRefName: string;
 	live: Pick<LivePullRequest, 'headSha' | 'baseRefName' | 'state'>;
-	settings: Pick<Settings, 'autoApprove' | 'smallPullRequestLineLimit'>;
+	settings: Pick<Settings, 'autoApprove' | 'smallPullRequestLineLimit' | 'reviewMode'>;
 	changedLines: number;
 }
 
@@ -151,7 +159,7 @@ export const decidePostingAction = ({
 	}
 
 	if (result.outcome === 'blocked') {
-		return { kind: 'block', summary: `${result.reason}: ${result.summary}` };
+		return { kind: 'block', summary: `${BLOCK_REASON_TEXT[result.reason]}: ${result.summary}` };
 	}
 
 	const hasLiveMoved =
@@ -167,6 +175,10 @@ export const decidePostingAction = ({
 
 	if (result.outcome === 'nothing_new') {
 		return { kind: 'record_nothing_new', summary: result.summary };
+	}
+
+	if (settings.reviewMode === 'manual') {
+		return { kind: 'hold_draft', draft: result };
 	}
 
 	if (result.filing === 'comment') {
@@ -198,7 +210,7 @@ export const decideApprovalAction = ({
 }: DecideApprovalActionParams): ApprovalAction => {
 	const pendingApproval = tracked.pendingApproval;
 
-	if (tracked.status !== 'awaiting_approval' || pendingApproval === null) {
+	if (!DRAFT_HOLDING_STATUSES.has(tracked.status) || pendingApproval === null) {
 		return { kind: 'not_awaiting_approval' };
 	}
 

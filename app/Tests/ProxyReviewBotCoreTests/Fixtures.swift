@@ -13,7 +13,8 @@ enum Fixtures {
         id: Int,
         status: PullRequestStatus = .awaitingApproval,
         headSha: String = "abc123",
-        reviewStartedAt: Double? = nil
+        reviewStartedAt: Double? = nil,
+        draft: PullRequestDraftSummary? = nil
     ) -> PullRequest {
         PullRequest(
             id: id,
@@ -32,7 +33,8 @@ enum Fixtures {
             summary: "Retry logic sound",
             reason: status == .needsYou ? "Gave up after 5 rounds" : nil,
             reviewStartedAt: reviewStartedAt,
-            updatedAt: 1_793_015_179_000
+            updatedAt: 1_793_015_179_000,
+            draft: draft
         )
     }
 }

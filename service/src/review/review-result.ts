@@ -143,14 +143,28 @@ const detectUsageLimit = (text: string, now: number): number | null => {
 	return rawTimestamp.length === 10 ? timestamp * 1000 : timestamp;
 };
 
-const parseEnvelope = (stdout: string): z.infer<typeof ENVELOPE_SCHEMA> | null => {
+const parseEnvelopeLine = (line: string): z.infer<typeof ENVELOPE_SCHEMA> | null => {
 	try {
-		const parsed = ENVELOPE_SCHEMA.safeParse(JSON.parse(stdout));
+		const parsed = ENVELOPE_SCHEMA.safeParse(JSON.parse(line));
 
 		return parsed.success ? parsed.data : null;
 	} catch {
 		return null;
 	}
+};
+
+const parseEnvelope = (stdout: string): z.infer<typeof ENVELOPE_SCHEMA> | null => {
+	const lines = stdout.trim().split('\n').reverse();
+
+	for (const line of lines) {
+		const envelope = parseEnvelopeLine(line);
+
+		if (envelope !== null) {
+			return envelope;
+		}
+	}
+
+	return null;
 };
 
 const readStructuredOutput = (envelope: z.infer<typeof ENVELOPE_SCHEMA>): unknown => {
@@ -163,6 +177,29 @@ const readStructuredOutput = (envelope: z.infer<typeof ENVELOPE_SCHEMA>): unknow
 	} catch {
 		return undefined;
 	}
+};
+
+const isJsonLine = (line: string): boolean => {
+	try {
+		JSON.parse(line);
+
+		return true;
+	} catch {
+		return false;
+	}
+};
+
+const buildErrorText = (
+	envelope: z.infer<typeof ENVELOPE_SCHEMA> | null,
+	output: ClaudeProcessOutput,
+): string => {
+	if (envelope !== null) {
+		return envelope.is_error ? `${envelope.result ?? ''}\n${output.stderr}` : '';
+	}
+
+	const plainStdoutLines = output.stdout.split('\n').filter((line) => !isJsonLine(line));
+
+	return [...plainStdoutLines, output.stderr].join('\n');
 };
 
 interface ParseClaudeOutputParams<Result> {
@@ -181,15 +218,15 @@ export const parseClaudeOutput = <Result>({
 	}
 
 	const envelope = parseEnvelope(output.stdout);
-	const combinedText = `${envelope?.result ?? output.stdout}\n${output.stderr}`;
-	const usageLimitedUntil = detectUsageLimit(combinedText, now);
+	const errorText = buildErrorText(envelope, output);
+	const usageLimitedUntil = detectUsageLimit(errorText, now);
 
 	if (usageLimitedUntil !== null) {
 		return { kind: 'usage_limited', resumeAt: usageLimitedUntil };
 	}
 
-	if (SETUP_BROKEN_PATTERN.test(combinedText) && (envelope === null || envelope.is_error)) {
-		return { kind: 'setup_broken', message: combinedText.trim().slice(0, 300) };
+	if (SETUP_BROKEN_PATTERN.test(errorText)) {
+		return { kind: 'setup_broken', message: errorText.trim().slice(0, 300) };
 	}
 
 	if (envelope === null) {

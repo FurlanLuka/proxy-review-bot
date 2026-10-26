@@ -52,7 +52,7 @@ describe('bot in manual mode', () => {
 		expect(setup.github.submissions).toEqual([]);
 	});
 
-	it('Review click → one review posted as COMMENT with the marker', async () => {
+	it('Review click → a draft held for you, nothing posted until you post it', async () => {
 		const setup = setUp({ reviewMode: 'manual' });
 
 		setup.github.addPullRequest(7);
@@ -63,10 +63,12 @@ describe('bot in manual mode', () => {
 		await setup.tickAndSettle();
 
 		expect(setup.claude.reviewCalls).toHaveLength(1);
-		expect(setup.github.submissions).toHaveLength(1);
-		expect(setup.github.submissions[0]?.event).toBe('COMMENT');
-		expect(setup.github.submissions[0]?.body).toContain(createBotMarker('head-1'));
-		expect(setup.statusOf(7)).toMatchObject({ status: 'waiting_on_author', rounds: 1 });
+		expect(setup.github.submissions).toEqual([]);
+		expect(setup.statusOf(7)).toMatchObject({
+			status: 'draft_ready',
+			rounds: 0,
+			draft: { filing: 'comment', commentCount: 1, summary: 'Retry loop never backs off' },
+		});
 	});
 });
 
@@ -621,7 +623,7 @@ describe('reopen and retry', () => {
 		await setup.tickAndSettle();
 
 		expect(setup.claude.reviewCalls).toHaveLength(1);
-		expect(setup.statusOf(7)?.status).toBe('waiting_on_author');
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
 	});
 });
 
@@ -691,7 +693,7 @@ describe('changes while a reply is running', () => {
 		setup.claude.replyGate = gate.promise;
 		setup.claude.replyOutcomes.push({ kind: 'result', result: { reply: 'Because.' } });
 		await setup.bot.tick();
-		await Bun.sleep(5);
+		await setup.claude.replyEntered;
 
 		expect(setup.claude.replyPrompts).toHaveLength(1);
 
@@ -797,5 +799,489 @@ describe('failure before the review starts', () => {
 		await setup.tickAndSettle();
 
 		expect(setup.claude.replyPrompts).toHaveLength(1);
+	});
+});
+
+describe('live progress in /state', () => {
+	it('shows subagents and the status line while reviewing, and clears afterwards', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+		const gate = createGate();
+
+		setup.github.addPullRequest(7);
+		setup.claude.reviewGate = gate.promise;
+		setup.claude.reviewProgressLines = [
+			JSON.stringify({
+				type: 'system',
+				subtype: 'task_started',
+				tool_use_id: 't1',
+				subagent_type: 'proxy:architect',
+				description: 'Design review',
+			}),
+			JSON.stringify({
+				type: 'assistant',
+				parent_tool_use_id: null,
+				message: {
+					content: [
+						{ type: 'text', text: 'PRB_STATUS {"phase":"review","message":"Waiting on advisors"}' },
+					],
+				},
+			}),
+		];
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.bot.tick();
+		await setup.claude.waitForReviewCall(1);
+
+		expect(setup.statusOf(7)?.progress).toMatchObject({
+			message: 'Waiting on advisors',
+			subagents: [{ label: 'Architecture', status: 'running' }],
+		});
+
+		gate.open();
+		await setup.bot.waitForIdle();
+
+		expect(setup.statusOf(7)?.progress).toBeNull();
+	});
+});
+
+describe('progress lifecycle across jobs', () => {
+	it('reply job shows "Answering …" while running and nothing afterwards', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+		const entry = setup.github.addPullRequest(7);
+		const gate = createGate();
+
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.tickAndSettle();
+		entry.threads = [
+			makeThread([
+				makeComment({ databaseId: 1, authorLogin: VIEWER_LOGIN, body: createBotMarker('head-1') }),
+				makeComment({ databaseId: 2, authorLogin: 'ana', body: 'Why?' }),
+			]),
+		];
+		setup.claude.replyGate = gate.promise;
+		await setup.bot.tick();
+		await setup.claude.replyEntered;
+
+		expect(setup.statusOf(7)?.progress).toMatchObject({
+			message: 'Answering @ana on src/retry.ts',
+			subagents: [],
+		});
+
+		gate.open();
+		await setup.bot.waitForIdle();
+
+		expect(setup.statusOf(7)?.progress).toBeNull();
+	});
+
+	it('Stop mid-review clears progress once the job ends', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+		const gate = createGate();
+
+		setup.github.addPullRequest(7);
+		setup.claude.reviewGate = gate.promise;
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.bot.tick();
+		await setup.claude.waitForReviewCall(1);
+		setup.bot.stop(setup.statusOf(7)?.id ?? 0);
+		gate.open();
+		await setup.bot.waitForIdle();
+
+		expect(setup.statusOf(7)?.progress).toBeNull();
+	});
+
+	it('the next review starts fresh, with no subagents carried over', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+
+		setup.github.addPullRequest(7);
+		setup.github.addPullRequest(8);
+		setup.claude.reviewProgressLines = [
+			JSON.stringify({
+				type: 'system',
+				subtype: 'task_started',
+				tool_use_id: 't1',
+				subagent_type: 'proxy:product',
+				description: 'Scope',
+			}),
+		];
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.tickAndSettle();
+
+		const gate = createGate();
+
+		setup.claude.reviewProgressLines = [];
+		setup.claude.reviewGate = gate.promise;
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.bot.tick();
+		await setup.claude.waitForReviewCall(2);
+
+		const pullRequests = setup.bot.getState().pullRequests;
+		const reviewing = pullRequests.find((pullRequest) => pullRequest.status === 'reviewing');
+		const finished = pullRequests.find((pullRequest) => pullRequest.status === 'waiting_on_author');
+
+		expect(finished?.progress).toBeNull();
+		expect(reviewing?.progress).toMatchObject({ message: 'Starting the review', subagents: [] });
+
+		gate.open();
+		await setup.bot.waitForIdle();
+	});
+});
+
+describe('manual-mode drafts', () => {
+	const reachDraft = async (filing: 'approve' | 'comment' = 'comment') => {
+		const setup = setUp({ reviewMode: 'manual' });
+
+		setup.github.addPullRequest(7);
+		await setup.tickAndSettle();
+		setup.claude.reviewOutcomes.push({
+			kind: 'result',
+			result: makeDraft({
+				headRefOid: 'head-1',
+				filing,
+				comments: [
+					{ path: 'src/retry.ts', line: 12, side: 'RIGHT', body: 'No delay between attempts.' },
+					{ path: 'src/retry.ts', line: 30, side: 'RIGHT', body: 'Magic number.' },
+				],
+			}),
+		});
+		setup.bot.requestReview(setup.statusOf(7)?.id ?? 0);
+		await setup.tickAndSettle();
+
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+
+		return { ...setup, id: setup.statusOf(7)?.id ?? 0 };
+	};
+
+	const editedPost = (overrides: Record<string, unknown> = {}) => ({
+		headSha: 'head-1',
+		event: 'COMMENT',
+		mainReview: 'Edited by you',
+		comments: [{ path: 'src/retry.ts', line: 12, side: 'RIGHT', body: 'Please add a backoff.' }],
+		fileComments: [],
+		...overrides,
+	});
+
+	it('getDraft returns the held draft with its head', async () => {
+		const setup = await reachDraft();
+
+		expect(setup.bot.getDraft(setup.id)).toMatchObject({
+			headSha: 'head-1',
+			comments: [{ line: 12 }, { line: 30 }],
+		});
+		expect(setup.bot.getDraft(999)).toBe('not_found');
+	});
+
+	it('posting your edits sends exactly them, with the marker, and counts a round', async () => {
+		const setup = await reachDraft();
+
+		expect((await setup.bot.postDraft(setup.id, editedPost())).result).toBe('ok');
+
+		const [submission] = setup.github.submissions;
+
+		expect(submission?.event).toBe('COMMENT');
+		expect(submission?.body.startsWith('Edited by you')).toBe(true);
+		expect(submission?.comments).toHaveLength(1);
+		expect(submission?.comments[0]?.body).toContain('Please add a backoff.');
+		expect(submission?.comments[0]?.body).toContain(createBotMarker('head-1'));
+		expect(setup.statusOf(7)).toMatchObject({
+			status: 'waiting_on_author',
+			rounds: 1,
+			draft: null,
+		});
+	});
+
+	it('approve filing can be posted as APPROVE or downgraded to a comment', async () => {
+		const approving = await reachDraft('approve');
+
+		expect(
+			(await approving.bot.postDraft(approving.id, editedPost({ event: 'APPROVE' }))).result,
+		).toBe('ok');
+		expect(approving.github.submissions[0]?.event).toBe('APPROVE');
+		expect(approving.statusOf(7)?.status).toBe('done');
+
+		const downgraded = await reachDraft('approve');
+
+		expect((await downgraded.bot.postDraft(downgraded.id, editedPost())).result).toBe('ok');
+		expect(downgraded.github.submissions[0]?.event).toBe('COMMENT');
+	});
+
+	it('invalid edits → invalid_draft and nothing posted', async () => {
+		const setup = await reachDraft();
+		const invented = editedPost({
+			comments: [{ path: 'src/other.ts', line: 1, side: 'RIGHT', body: 'x' }],
+		});
+
+		expect((await setup.bot.postDraft(setup.id, invented)).result).toBe('invalid_draft');
+		expect(await setup.bot.postDraft(setup.id, editedPost({ event: 'APPROVE' }))).toEqual({
+			result: 'invalid_draft',
+			reason: 'this draft cannot approve',
+		});
+		expect(setup.github.submissions).toEqual([]);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+	});
+
+	it('new commits before you post → head_moved, nothing posted, and the new head is reviewed', async () => {
+		const setup = await reachDraft();
+
+		pushCommit(setup, 7, 'head-2');
+
+		expect((await setup.bot.postDraft(setup.id, editedPost())).result).toBe('head_moved');
+		expect(setup.github.submissions).toEqual([]);
+
+		setup.clock.now += QUIET_PERIOD_MS;
+		await setup.tickAndSettle();
+
+		expect(setup.statusOf(7)?.status).toBe('needs_review');
+	});
+
+	it('a push while the draft waits clears it on the next tick', async () => {
+		const setup = await reachDraft();
+
+		pushCommit(setup, 7, 'head-2');
+		await setup.tickAndSettle();
+
+		expect(setup.statusOf(7)).toMatchObject({ status: 'waiting_on_author', draft: null });
+	});
+
+	it('discard → no post, no re-review until the author pushes', async () => {
+		const setup = await reachDraft();
+
+		expect(setup.bot.discardDraft(setup.id)).toBe('ok');
+		expect(setup.bot.discardDraft(setup.id)).toBe('no_draft');
+		await setup.tickAndSettle();
+		await setup.tickAndSettle();
+
+		expect(setup.github.submissions).toEqual([]);
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.statusOf(7)?.status).toBe('waiting_on_author');
+	});
+
+	it('double click on Post → one review', async () => {
+		const setup = await reachDraft();
+		const results = await Promise.all([
+			setup.bot.postDraft(setup.id, editedPost()),
+			setup.bot.postDraft(setup.id, editedPost()),
+		]);
+
+		expect(results.map((outcome) => outcome.result).sort()).toEqual(['busy', 'ok']);
+		expect(setup.github.submissions).toHaveLength(1);
+	});
+});
+
+describe('manual-mode draft edge cases', () => {
+	const reachDraft = async (filing: 'approve' | 'comment' = 'comment') => {
+		const setup = setUp({ reviewMode: 'manual' });
+
+		setup.github.addPullRequest(7);
+		await setup.tickAndSettle();
+		setup.claude.reviewOutcomes.push({
+			kind: 'result',
+			result: makeDraft({
+				headRefOid: 'head-1',
+				filing,
+				comments: [
+					{ path: 'src/retry.ts', line: 12, side: 'RIGHT', body: 'A' },
+					{ path: 'src/retry.ts', line: 30, side: 'RIGHT', body: 'B' },
+				],
+				fileComments: [{ path: 'src/old.ts', body: 'C' }],
+			}),
+		});
+		setup.bot.requestReview(setup.statusOf(7)?.id ?? 0);
+		await setup.tickAndSettle();
+
+		return { ...setup, id: setup.statusOf(7)?.id ?? 0 };
+	};
+
+	const post = {
+		headSha: 'head-1',
+		event: 'COMMENT',
+		mainReview: 'Main',
+		comments: [],
+		fileComments: [],
+	};
+
+	it('/state draft summary has the filing, summary and every comment counted', async () => {
+		const setup = await reachDraft('approve');
+
+		expect(setup.statusOf(7)?.draft).toEqual({
+			filing: 'approve',
+			summary: 'Retry loop never backs off',
+			commentCount: 3,
+		});
+	});
+
+	it('Review again on a held draft → old draft gone everywhere, and stays gone if that review fails', async () => {
+		const setup = await reachDraft();
+
+		setup.bot.requestReview(setup.id);
+
+		expect(setup.statusOf(7)?.draft).toBeNull();
+		expect(setup.bot.getDraft(setup.id)).toBe('no_draft');
+
+		setup.claude.reviewOutcomes.push({ kind: 'failed', summary: 'Claude run timed out' });
+		await setup.tickAndSettle();
+
+		expect(setup.statusOf(7)?.draft).toBeNull();
+	});
+
+	it('edits from a window opened on an older draft → head_moved, nothing posted', async () => {
+		const setup = await reachDraft();
+
+		expect((await setup.bot.postDraft(setup.id, { ...post, headSha: 'head-0' })).result).toBe(
+			'head_moved',
+		);
+		expect(setup.github.submissions).toEqual([]);
+	});
+
+	it('GitHub fails while posting → draft kept, guard released, retry posts once', async () => {
+		const setup = await reachDraft();
+
+		setup.github.failSubmissionsWith = [500];
+
+		await expect(setup.bot.postDraft(setup.id, post)).rejects.toThrow();
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+		expect(setup.bot.getDraft(setup.id)).not.toBe('no_draft');
+		expect((await setup.bot.postDraft(setup.id, post)).result).toBe('ok');
+		expect(setup.github.submissions).toHaveLength(1);
+	});
+
+	it('Approve on a draft_ready PR: approve filing posts it unedited; comment filing is refused', async () => {
+		const approving = await reachDraft('approve');
+
+		expect(await approving.bot.approve(approving.id)).toBe('ok');
+		expect(approving.github.submissions[0]?.event).toBe('APPROVE');
+
+		const commenting = await reachDraft('comment');
+
+		expect(await commenting.bot.approve(commenting.id)).toBe('invalid_draft');
+		expect(commenting.github.submissions).toEqual([]);
+	});
+
+	it('Discard while a post is in flight → busy, then exactly one review', async () => {
+		const setup = await reachDraft();
+		const gate = createGate();
+		const realSubmit = setup.github.submitReview;
+
+		setup.github.submitReview = async (reference, submission) => {
+			await gate.promise;
+			await realSubmit(reference, submission);
+		};
+
+		const posting = setup.bot.postDraft(setup.id, post);
+
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(setup.bot.discardDraft(setup.id)).toBe('busy');
+
+		gate.open();
+
+		expect((await posting).result).toBe('ok');
+		expect(setup.github.submissions).toHaveLength(1);
+		expect(setup.statusOf(7)?.status).toBe('waiting_on_author');
+	});
+
+	it('a review started in auto mode is held as a draft if you switch to manual before it finishes', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+		const gate = createGate();
+
+		setup.github.addPullRequest(7);
+		setup.claude.reviewGate = gate.promise;
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.bot.tick();
+		await setup.claude.waitForReviewCall(1);
+		setup.dependencies.settingsStore.replace({
+			...setup.dependencies.settingsStore.get(),
+			reviewMode: 'manual',
+		});
+		gate.open();
+		await setup.bot.waitForIdle();
+
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+		expect(setup.github.submissions).toEqual([]);
+	});
+
+	it('replies still run while a draft waits', async () => {
+		const setup = await reachDraft();
+		const entry = setup.github.pullRequests.get(7);
+
+		setup.dependencies.store.updatePullRequest(setup.id, { rounds: 1 });
+
+		if (entry !== undefined) {
+			entry.threads = [
+				makeThread([
+					makeComment({
+						databaseId: 1,
+						authorLogin: VIEWER_LOGIN,
+						body: createBotMarker('head-0'),
+					}),
+					makeComment({ databaseId: 2, authorLogin: 'ana', body: 'Why?' }),
+				]),
+			];
+		}
+
+		setup.claude.replyOutcomes.push({ kind: 'result', result: { reply: 'Because.' } });
+		await setup.tickAndSettle();
+
+		expect(setup.github.replies).toHaveLength(1);
+	});
+});
+
+describe('request changes from a draft', () => {
+	it('posts REQUEST_CHANGES and waits on the author; its own review is not a manual takeover', async () => {
+		const setup = setUp({ reviewMode: 'manual' });
+		const entry = setup.github.addPullRequest(7);
+
+		await setup.tickAndSettle();
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.bot.requestReview(setup.statusOf(7)?.id ?? 0);
+		await setup.tickAndSettle();
+
+		const id = setup.statusOf(7)?.id ?? 0;
+		const body = {
+			headSha: 'head-1',
+			event: 'REQUEST_CHANGES',
+			mainReview: 'Please fix the backoff',
+			comments: [],
+			fileComments: [],
+		};
+
+		expect((await setup.bot.postDraft(id, body)).result).toBe('ok');
+		expect(setup.github.submissions[0]?.event).toBe('REQUEST_CHANGES');
+		expect(entry.reviews.at(-1)?.state).toBe('CHANGES_REQUESTED');
+		expect(setup.statusOf(7)?.status).toBe('waiting_on_author');
+
+		await setup.tickAndSettle();
+
+		expect(setup.statusOf(7)?.status).toBe('waiting_on_author');
+	});
+
+	it('already requested changes for this head (crash after post) → not posted twice', async () => {
+		const setup = setUp({ reviewMode: 'manual' });
+		const entry = setup.github.addPullRequest(7);
+
+		await setup.tickAndSettle();
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.bot.requestReview(setup.statusOf(7)?.id ?? 0);
+		await setup.tickAndSettle();
+		entry.reviews.push({
+			id: 1,
+			state: 'CHANGES_REQUESTED',
+			body: `Earlier\n${createBotMarker('head-1')}`,
+			submittedAt: new Date(setup.clock.now).toISOString(),
+			commitId: 'head-1',
+			authorLogin: VIEWER_LOGIN,
+			authorType: 'User',
+		});
+
+		const result = await setup.bot.postDraft(setup.statusOf(7)?.id ?? 0, {
+			headSha: 'head-1',
+			event: 'REQUEST_CHANGES',
+			mainReview: 'Please fix the backoff',
+			comments: [],
+			fileComments: [],
+		});
+
+		expect(result.result).toBe('ok');
+		expect(setup.github.submissions).toEqual([]);
+		expect(setup.statusOf(7)?.status).toBe('waiting_on_author');
 	});
 });

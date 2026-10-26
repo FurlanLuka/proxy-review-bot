@@ -7,28 +7,36 @@ struct SetupSectionView: View {
     let waitingCount: Int
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "wrench.and.screwdriver.fill")
+                    .foregroundStyle(Palette.peach.ink)
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Finish setting up")
+                        .font(MenuStyle.titleFont)
+
+                    Text(waitingCount > 0 ? "\(waitingCount) waiting · reviews resume once fixed" : "Reviews start once these pass")
+                        .font(MenuStyle.metaFont)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button {
+                    model.checkReadiness()
+                } label: {
+                    Label("Check Again", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(PillButtonStyle())
+            }
+
             ForEach(readiness.checks) { check in
                 SetupCheckRowView(check: check)
             }
-
-            Button("Re-check") {
-                model.checkReadiness()
-            }
-            .controlSize(.small)
         }
         .padding(12)
-
-        Divider()
-
-        if waitingCount > 0 {
-            Text("\(waitingCount) waiting · reviews resume once fixed")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-
-            Divider()
-        }
+        .card()
     }
 }

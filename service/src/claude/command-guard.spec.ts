@@ -123,7 +123,8 @@ describe('buildClaudeArgs', () => {
 
 	it('runs headless with JSON output, the schema and no session persistence', () => {
 		expect(reviewArgs[0]).toBe('-p');
-		expect(valueAfter(reviewArgs, '--output-format')).toBe('json');
+		expect(valueAfter(reviewArgs, '--output-format')).toBe('stream-json');
+		expect(reviewArgs).toContain('--verbose');
 		expect(valueAfter(reviewArgs, '--json-schema')).toBe('{"type":"object"}');
 		expect(reviewArgs).toContain('--no-session-persistence');
 	});

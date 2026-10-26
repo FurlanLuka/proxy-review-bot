@@ -122,6 +122,13 @@ export const buildPostingUpdate = ({
 				pendingApproval: { headSha: jobHeadSha, draft: action.draft },
 				lastSummary: action.draft.summary,
 			};
+		case 'hold_draft':
+			return {
+				...reviewed,
+				status: 'draft_ready',
+				pendingApproval: { headSha: jobHeadSha, draft: action.draft },
+				lastSummary: action.draft.summary,
+			};
 		case 'posted':
 			return {
 				...reviewed,

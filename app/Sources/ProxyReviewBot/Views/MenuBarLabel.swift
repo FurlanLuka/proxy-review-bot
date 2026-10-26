@@ -1,3 +1,4 @@
+import ProxyReviewBotCore
 import SwiftUI
 
 struct MenuBarLabel: View {
@@ -11,6 +12,8 @@ struct MenuBarLabel: View {
                 Text("\(model.attentionCount)")
             }
         }
+        .accessibilityElement()
+        .accessibilityLabel(MenuBarAccessibilityLabel.text(for: model.state, attentionCount: model.attentionCount))
     }
 
     private var symbolName: String {

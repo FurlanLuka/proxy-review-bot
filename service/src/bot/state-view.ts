@@ -1,5 +1,7 @@
 import type { Readiness } from '../readiness/readiness.js';
+import type { ReviewProgress } from '../review/review-progress.js';
 import type { Settings } from '../settings/settings.js';
+import { DRAFT_HOLDING_STATUSES } from '../tracking/tracking-types.js';
 import type { TrackedPullRequest } from '../tracking/tracking-types.js';
 
 const DONE_VISIBILITY_MS = 24 * 60 * 60_000;
@@ -22,6 +24,14 @@ export interface PullRequestView {
 	reason: string | null;
 	reviewStartedAt: number | null;
 	updatedAt: number;
+	progress: ReviewProgress | null;
+	draft: DraftSummary | null;
+}
+
+export interface DraftSummary {
+	filing: 'approve' | 'comment';
+	summary: string;
+	commentCount: number;
 }
 
 export interface BotState {
@@ -33,7 +43,11 @@ export interface BotState {
 	pullRequests: PullRequestView[];
 }
 
-const toView = (tracked: TrackedPullRequest, maxRounds: number): PullRequestView => ({
+const toView = (
+	tracked: TrackedPullRequest,
+	maxRounds: number,
+	progress: ReviewProgress | null,
+): PullRequestView => ({
 	id: tracked.id,
 	owner: tracked.owner,
 	repo: tracked.repo,
@@ -51,6 +65,17 @@ const toView = (tracked: TrackedPullRequest, maxRounds: number): PullRequestView
 	reason: tracked.lastError,
 	reviewStartedAt: tracked.reviewStartedAt,
 	updatedAt: tracked.updatedAt,
+	progress,
+	draft:
+		tracked.pendingApproval === null || !DRAFT_HOLDING_STATUSES.has(tracked.status)
+			? null
+			: {
+					filing: tracked.pendingApproval.draft.filing,
+					summary: tracked.pendingApproval.draft.summary,
+					commentCount:
+						tracked.pendingApproval.draft.comments.length +
+						tracked.pendingApproval.draft.fileComments.length,
+				},
 });
 
 interface BuildBotStateParams {
@@ -60,12 +85,14 @@ interface BuildBotStateParams {
 	usageLimitedUntil: number | null;
 	readiness: Readiness;
 	settings: Settings;
+	progressById: ReadonlyMap<number, ReviewProgress>;
 	now: number;
 }
 
 export const buildBotState = ({
 	trackedPullRequests,
 	settings,
+	progressById,
 	now,
 	...status
 }: BuildBotStateParams): BotState => {
@@ -76,6 +103,6 @@ export const buildBotState = ({
 		settings,
 		pullRequests: trackedPullRequests
 			.filter((tracked) => tracked.status !== 'done' || tracked.updatedAt >= visibleSince)
-			.map((tracked) => toView(tracked, settings.maxRounds)),
+			.map((tracked) => toView(tracked, settings.maxRounds, progressById.get(tracked.id) ?? null)),
 	};
 };

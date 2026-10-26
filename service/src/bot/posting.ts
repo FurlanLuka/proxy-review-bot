@@ -1,11 +1,15 @@
-import type { GitHubClient, PullRequestReference } from '../github/github-types.js';
+import type { GitHubClient, PullRequestReference, ReviewEvent } from '../github/github-types.js';
 import { GitHubRequestError } from '../github/github-types.js';
 import type { Logger } from '../logging/logger.js';
 import { hasBotMarkerForHead } from '../review/bot-marker.js';
 import { buildReviewPayload } from '../review/review-payload.js';
 import type { DraftedReviewResult } from '../review/review-result.js';
 
-const REVIEW_STATE_BY_EVENT = { COMMENT: 'COMMENTED', APPROVE: 'APPROVED' } as const;
+const REVIEW_STATE_BY_EVENT = {
+	COMMENT: 'COMMENTED',
+	APPROVE: 'APPROVED',
+	REQUEST_CHANGES: 'CHANGES_REQUESTED',
+} as const;
 
 export type PostReviewOutcome = 'posted' | 'posted_folded' | 'already_posted';
 
@@ -14,7 +18,7 @@ interface PostReviewParams {
 	logger: Logger;
 	reference: PullRequestReference;
 	draft: DraftedReviewResult;
-	event: 'COMMENT' | 'APPROVE';
+	event: ReviewEvent;
 	headSha: string;
 	viewerLogin: string;
 }

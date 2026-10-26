@@ -23,7 +23,13 @@ struct ServiceClient: Sendable {
     }
 
     func perform(_ action: ServiceAction) async throws {
-        _ = try await send(method: "POST", path: action.path)
+        _ = try await send(method: action.method, path: action.path, body: action.encodedBody())
+    }
+
+    func fetchDraft(pullRequestID: Int) async throws -> ReviewDraft {
+        let action = ServiceAction.fetchDraft(pullRequestID: pullRequestID)
+        let data = try await send(method: action.method, path: action.path)
+        return try JSONDecoder().decode(ReviewDraft.self, from: data)
     }
 
     func saveSettings(_ settings: BotSettings) async throws -> BotSettings {
@@ -50,8 +56,12 @@ struct ServiceClient: Sendable {
             }
 
             guard (200..<300).contains(httpResponse.statusCode) else {
-                let code = try? JSONDecoder().decode(ServiceErrorResponse.self, from: data).error
-                throw ServiceClientError.failed(statusCode: httpResponse.statusCode, code: code)
+                let errorResponse = try? JSONDecoder().decode(ServiceErrorResponse.self, from: data)
+                throw ServiceClientError.failed(
+                    statusCode: httpResponse.statusCode,
+                    code: errorResponse?.error,
+                    reason: errorResponse?.reason
+                )
             }
 
             return data

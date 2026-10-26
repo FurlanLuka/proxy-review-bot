@@ -29,6 +29,14 @@ struct NotificationCandidate: Equatable, Sendable {
                 pullRequest,
                 notice: Notice(identifier: key(for: pullRequest), title: "\(pullRequest.shortName) is ready to approve", body: body)
             )
+        case .draftReady:
+            let summary = (pullRequest.draft?.summary ?? pullRequest.summary).map { "\($0)\n" } ?? ""
+            let body = "\(summary)\(PullRequestDetail.lineCountText(for: pullRequest)) · round \(pullRequest.rounds)"
+
+            return pullRequestCandidate(
+                pullRequest,
+                notice: Notice(identifier: key(for: pullRequest), title: "\(pullRequest.shortName) has a draft review ready", body: body)
+            )
         case .needsYou:
             return pullRequestCandidate(
                 pullRequest,

@@ -13,7 +13,13 @@ Outcomes:
 - "drafted": a review is ready. "filing" is "approve" or "comment" per the skill's filing rules. Fill headRefOid, baseRefName and targetTipOid from the pinned snapshot. "summary" is one line under 120 characters for a menu. "mainReview", "comments" (path, line, side, body) and "fileComments" are the exact text to post. "coverage" says what you checked and could not verify.
 - "nothing_new": a re-review where nothing since the last review needs a new review.
 - "blocked": one of the skill's stop conditions (snapshot_unstable, diff_mismatch, missing_access, other). Merge conflicts are findings, not blockers.
-- "failed": anything else that prevented a review.`;
+- "failed": anything else that prevented a review.
+
+Progress reporting (the developer's menu shows it live):
+- Before each major step, print exactly one line on its own, with nothing else on that line:
+  PRB_STATUS {"phase":"<gather|review|verify|draft>","message":"<what you are doing now, present tense, under 80 characters>"}
+- Examples: PRB_STATUS {"phase":"gather","message":"Fetching the PR snapshot"} / PRB_STATUS {"phase":"review","message":"Waiting on 4 advisors and the bug check"}
+- Status lines are only for progress; the review itself goes in the final JSON result.`;
 
 export const REPLY_SYSTEM_PROMPT = `You are running unattended inside proxy-review-bot, answering a follow-up in a review thread the bot started on the developer's behalf. Nobody is watching this session.
 

@@ -1,5 +1,6 @@
 import { buildFailureUpdate, buildPostingUpdate } from '../review/pull-request-updates.js';
 import { decidePostingAction } from '../review/review-decisions.js';
+import type { ReviewProgress } from '../review/review-progress.js';
 import type { ReviewResult } from '../review/review-result.js';
 import type { PullRequestUpdate, TrackedPullRequest } from '../tracking/tracking-types.js';
 import type { BotDependencies } from './bot-context.js';
@@ -15,6 +16,7 @@ interface RunReviewJobParams {
 	tracked: TrackedPullRequest;
 	viewerLogin: string;
 	isPaused: () => boolean;
+	onProgress?: (progress: ReviewProgress) => void;
 }
 
 type JobRelease = 'discard' | 'requeue';
@@ -158,7 +160,11 @@ export const runReviewJob = async (params: RunReviewJobParams): Promise<JobOutco
 		jobLogger.info('review_job_started', { url: tracked.url, headSha: live.headSha });
 
 		const clonePath = await clones.prepareClone(tracked);
-		const outcome = await claude.runReview({ pullRequestUrl: tracked.url, clonePath });
+		const outcome = await claude.runReview({
+			pullRequestUrl: tracked.url,
+			clonePath,
+			onProgress: params.onProgress,
+		});
 		const release = findRelease(params, false);
 
 		if (release !== null) {

@@ -6,6 +6,7 @@ export type PullRequestStatus =
 	| 'reviewing'
 	| 'waiting_on_author'
 	| 'awaiting_approval'
+	| 'draft_ready'
 	| 'blocked'
 	| 'needs_you'
 	| 'done'
@@ -15,6 +16,11 @@ export const TERMINAL_STATUSES: ReadonlySet<PullRequestStatus> = new Set([
 	'needs_you',
 	'done',
 	'stopped',
+]);
+
+export const DRAFT_HOLDING_STATUSES: ReadonlySet<PullRequestStatus> = new Set([
+	'awaiting_approval',
+	'draft_ready',
 ]);
 
 export interface PendingApproval {

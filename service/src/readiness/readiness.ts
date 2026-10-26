@@ -1,6 +1,7 @@
-import { existsSync } from 'node:fs';
+import { accessSync, constants, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { RunCommand } from '../commands/run-command.js';
+import type { Logger } from '../logging/logger.js';
 
 export interface ReadinessFacts {
 	claudePath: string | null;
@@ -34,7 +35,7 @@ export const checkReadiness = (facts: ReadinessFacts): Readiness => {
 			name: 'claude_installed',
 			isOk: facts.claudePath !== null,
 			label: facts.claudePath === null ? 'Claude Code not found' : 'Claude Code found',
-			fix: facts.claudePath === null ? 'Install Claude Code or set its path in Settings' : null,
+			fix: facts.claudePath === null ? 'curl -fsSL https://claude.ai/install.sh | bash' : null,
 		},
 		{
 			name: 'claude_logged_in',
@@ -73,6 +74,7 @@ export const checkReadiness = (facts: ReadinessFacts): Readiness => {
 
 interface GatherReadinessFactsParams {
 	runCommand: RunCommand;
+	logger: Logger;
 	claudePath: string | null;
 	ghPath: string | null;
 	gitPath: string | null;
@@ -177,19 +179,76 @@ const gatherGhLogin = async (params: GatherReadinessFactsParams): Promise<string
 	return result.exitCode === 0 && login.length > 0 ? login : null;
 };
 
+const toExecutablePath = (path: string | null): string | null => {
+	if (path === null) {
+		return null;
+	}
+
+	try {
+		accessSync(path, constants.X_OK);
+
+		return path;
+	} catch {
+		return null;
+	}
+};
+
+interface WithFallbackParams<Value> {
+	check: string;
+	gather: Promise<Value>;
+	fallback: Value;
+	logger: Logger;
+}
+
+const withFallback = async <Value>({
+	check,
+	gather,
+	fallback,
+	logger,
+}: WithFallbackParams<Value>): Promise<Value> => {
+	try {
+		return await gather;
+	} catch (error) {
+		logger.warn('readiness_check_failed', { check, error });
+
+		return fallback;
+	}
+};
+
 export const gatherReadinessFacts = async (
 	params: GatherReadinessFactsParams,
 ): Promise<ReadinessFacts> => {
+	const checkedParams = {
+		...params,
+		claudePath: toExecutablePath(params.claudePath),
+		ghPath: toExecutablePath(params.ghPath),
+		gitPath: toExecutablePath(params.gitPath),
+	};
 	const [claudeAuth, proxyPlugin, ghLogin] = await Promise.all([
-		gatherClaudeAuth(params),
-		gatherProxyPlugin(params),
-		gatherGhLogin(params),
+		withFallback({
+			check: 'claude_auth',
+			gather: gatherClaudeAuth(checkedParams),
+			fallback: { isLoggedIn: false, authMethod: null, subscriptionType: null },
+			logger: params.logger,
+		}),
+		withFallback({
+			check: 'proxy_plugin',
+			gather: gatherProxyPlugin(checkedParams),
+			fallback: { isInstalled: false, version: null, hasPullRequestReviewSkill: false },
+			logger: params.logger,
+		}),
+		withFallback({
+			check: 'gh_login',
+			gather: gatherGhLogin(checkedParams),
+			fallback: null,
+			logger: params.logger,
+		}),
 	]);
 
 	return {
-		claudePath: params.claudePath,
-		ghPath: params.ghPath,
-		gitPath: params.gitPath,
+		claudePath: checkedParams.claudePath,
+		ghPath: checkedParams.ghPath,
+		gitPath: checkedParams.gitPath,
 		claudeAuth,
 		proxyPlugin,
 		ghLogin,

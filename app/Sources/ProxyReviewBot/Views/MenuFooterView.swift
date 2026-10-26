@@ -6,24 +6,30 @@ struct MenuFooterView: View {
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        HStack(spacing: 2) {
             if let state = model.state {
-                MenuItemButton(title: state.isPaused ? "Resume" : "Pause") {
+                IconButton(
+                    systemName: state.isPaused ? "play.fill" : "pause.fill",
+                    label: state.isPaused ? "Resume Reviews" : "Pause Reviews",
+                    help: state.isPaused ? "Resume Reviews" : "Pause Reviews"
+                ) {
                     model.togglePause()
                 }
             }
 
-            MenuItemButton(title: "Settings…", shortcutHint: "⌘,") {
-                NSApp.activate(ignoringOtherApps: true)
+            IconButton(systemName: "gearshape", label: "Settings", help: "Settings (⌘,)") {
+                NSApp.activate()
                 openSettings()
             }
             .keyboardShortcut(",")
 
-            MenuItemButton(title: "Open logs") {
+            IconButton(systemName: "doc.plaintext", label: "Open Logs", help: "Open Logs") {
                 model.openLogs()
             }
 
-            MenuItemButton(title: "Quit", shortcutHint: "⌘Q") {
+            Spacer()
+
+            IconButton(systemName: "power", label: "Quit Proxy Review Bot", help: "Quit (⌘Q)") {
                 NSApp.terminate(nil)
             }
             .keyboardShortcut("q")

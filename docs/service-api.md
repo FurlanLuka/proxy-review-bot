@@ -55,7 +55,8 @@ Every request carries `Authorization: Bearer <PRB_TOKEN>`. A request without it 
 			"summary": "Retry logic sound, tests cover backoff",
 			"reason": null,
 			"reviewStartedAt": null,
-			"updatedAt": 1793015179000
+			"updatedAt": 1793015179000,
+			"progress": null
 		}
 	]
 }
@@ -64,10 +65,37 @@ Every request carries `Authorization: Bearer <PRB_TOKEN>`. A request without it 
 - `usageLimitedUntil`: epoch ms or null.
 - `readiness.status`: `ready`, `setup_needed` or `checking`.
 - `checks[].fix`: a shell command to show with a Copy button, or null.
-- `status`: one of `needs_review`, `queued`, `reviewing`, `waiting_on_author`, `awaiting_approval`, `blocked`, `needs_you`, `done`, `stopped`.
+- `status`: one of `needs_review`, `queued`, `reviewing`, `waiting_on_author`, `awaiting_approval`, `draft_ready`, `blocked`, `needs_you`, `done`, `stopped`.
+  - `draft_ready` (manual mode): a finished review is waiting for you to check it. You can edit, post, approve or discard it. In auto mode, reviews post on their own.
+- `draft`: on `draft_ready` and `awaiting_approval` rows, `{ "filing": "comment" | "approve", "summary": "…", "commentCount": 3 }`; otherwise null.
 - `summary`: the last one-line review summary.
 - `reason`: why the PR is `needs_you`, `blocked` or failed.
 - `reviewStartedAt`: epoch ms while the status is `reviewing`.
+- `progress`: live progress while a review or reply is running, otherwise null. It's kept in memory only:
+
+  ```json
+  {
+  	"phase": "review",
+  	"message": "Waiting on 4 advisors and the bug check",
+  	"updatedAt": 1793015300000,
+  	"subagents": [
+  		{
+  			"id": "toolu_01…",
+  			"agentType": "proxy:architect",
+  			"label": "Architecture",
+  			"description": "Review module design",
+  			"status": "running",
+  			"currentStep": "Running git show …",
+  			"startedAt": 1793015200000,
+  			"finishedAt": null
+  		}
+  	]
+  }
+  ```
+
+  - `phase` and `message` come from the `PRB_STATUS {…}` lines the review prompt asks Claude to print.
+  - `subagents` comes from Claude Code's own `task_started`, `task_progress` and `task_notification` stream events.
+  - A subagent's `status` is `running`, `completed` or `failed`.
 - Rows are ordered by `updatedAt` descending. `done` rows are only included for 24 hours.
 
 ## Actions
@@ -77,11 +105,53 @@ Every action is a POST, returns `{ "ok": true }` with status 200, and returns `{
 | Route | Effect | Errors |
 |---|---|---|
 | `/prs/:id/review` | queue a review (manual mode, or Review again) | 404, 409 `busy` (a review or approval is running) |
-| `/prs/:id/approve` | approve an `awaiting_approval` PR | 404, 409 `head_moved` (the PR is re-queued), 409 `not_awaiting_approval`, 409 `busy` |
+| `/prs/:id/approve` | approve an `awaiting_approval` PR, or a `draft_ready` PR whose draft filing is `approve`, unedited | 404, 409 `head_moved` (the PR is re-queued), 409 `not_awaiting_approval`, 409 `busy` |
 | `/prs/:id/stop` | stop the bot on this PR | 404 |
+| `/prs/:id/post` | post the draft, edited or not; body below | 404, 400 `invalid_draft` with a `reason`, 409 `no_draft`, `head_moved` (the PR is re-reviewed), `busy` |
+| `/prs/:id/discard` | throw the draft away; the PR waits for new commits | 404, 409 `no_draft` |
 | `/prs/:id/retry` | reset rounds and attempts, then queue a review | 404, 409 `busy` |
 | `/pause`, `/resume` | pause or resume the whole bot | |
 | `/readiness/check` | re-run the setup checks | |
+
+## GET /prs/:id/draft
+
+Returns the draft held for a `draft_ready` or `awaiting_approval` PR. It responds 404 when the PR doesn't exist, and 409 `no_draft` when the PR has no draft.
+
+```json
+{
+	"headSha": "abc123",
+	"filing": "comment",
+	"summary": "Retry loop never backs off",
+	"mainReview": "The retry loop needs a backoff…",
+	"comments": [{ "path": "src/retry.ts", "line": 12, "side": "RIGHT", "body": "No delay between attempts." }],
+	"fileComments": [{ "path": "src/old.ts", "body": "This file can go." }],
+	"coverage": "Checked retry paths; couldn't run the tests."
+}
+```
+
+## POST /prs/:id/post
+
+Posts what you send, which can differ from the stored draft:
+
+```json
+{
+	"headSha": "abc123",
+	"event": "COMMENT",
+	"mainReview": "…edited text…",
+	"comments": [{ "path": "src/retry.ts", "line": 12, "side": "RIGHT", "body": "…" }],
+	"fileComments": []
+}
+```
+
+- `headSha` must be the `headSha` from GET /prs/:id/draft. A draft that was replaced since you opened it returns 409 `head_moved`.
+- `event` is `COMMENT`, `APPROVE` or `REQUEST_CHANGES`.
+  - `COMMENT` and `REQUEST_CHANGES` are always allowed.
+  - `APPROVE` only when the draft's filing is `approve`.
+  - The skill never proposes `REQUEST_CHANGES` itself; it is only ever your choice.
+- Drop a comment by leaving it out. Only the `path`, `line` and `side` values from the draft are accepted, so an anchor can't be invented.
+- The bot's marker is added to every body when posting.
+- Before posting, the service checks the PR head is still the drafted one.
+- Afterwards the status becomes `waiting_on_author` for `COMMENT`, or `done` for `APPROVE`.
 
 ## GET /settings, PUT /settings
 

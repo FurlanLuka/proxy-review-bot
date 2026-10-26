@@ -9,13 +9,22 @@ interface CreateApiHandlerParams {
 	logger: Logger;
 }
 
-const PULL_REQUEST_ACTION_PATTERN = /^\/prs\/(\d+)\/(review|approve|stop|retry)$/;
+const PULL_REQUEST_ACTION_PATTERN = /^\/prs\/(\d+)\/(review|approve|stop|retry|post|discard)$/;
+const DRAFT_PATTERN = /^\/prs\/(\d+)\/draft$/;
 
 const json = (body: unknown, status = 200): Response => {
 	return Response.json(body, { status });
 };
 
-const actionResponse = (result: string): Response => {
+const actionResponse = (outcome: string | { result: string; reason?: string }): Response => {
+	const result = typeof outcome === 'string' ? outcome : outcome.result;
+
+	if (result === 'invalid_draft') {
+		const reason = typeof outcome === 'string' ? undefined : outcome.reason;
+
+		return json({ error: result, ...(reason !== undefined && { reason }) }, 400);
+	}
+
 	return result === 'ok'
 		? json({ ok: true })
 		: result === 'not_found'
@@ -29,6 +38,18 @@ export const createApiHandler = ({ bot, settingsStore, token, logger }: CreateAp
 
 		if (method === 'GET' && path === '/state') {
 			return json(bot.getState());
+		}
+
+		const draftMatch = DRAFT_PATTERN.exec(path);
+
+		if (method === 'GET' && draftMatch !== null) {
+			const draft = bot.getDraft(Number(draftMatch[1]));
+
+			return draft === 'not_found'
+				? json({ error: 'not_found' }, 404)
+				: draft === 'no_draft'
+					? json({ error: 'no_draft' }, 409)
+					: json(draft);
 		}
 
 		if (method === 'GET' && path === '/settings') {
@@ -70,6 +91,8 @@ export const createApiHandler = ({ bot, settingsStore, token, logger }: CreateAp
 			stop: async () => bot.stop(id),
 			retry: async () => bot.retry(id),
 			approve: () => bot.approve(id),
+			post: async () => bot.postDraft(id, await request.json().catch(() => null)),
+			discard: async () => bot.discardDraft(id),
 		};
 		const result = await actions[match[2] as keyof typeof actions]();
 

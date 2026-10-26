@@ -32,4 +32,6 @@ jobs:
         run: swift test
 
       - name: Check the installer
-        run: sh -n install.sh
+        run: |
+          sh -n install.sh
+          sh tests/install-parsing.sh

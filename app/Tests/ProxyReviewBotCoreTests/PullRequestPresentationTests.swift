@@ -29,6 +29,19 @@ final class PullRequestPresentationTests: XCTestCase {
         XCTAssertEqual(text, "Reviewing · 6 min")
     }
 
+    func testRoundTextSpellsOutTheRound() {
+        let pullRequest = Fixtures.pullRequest(id: 1, status: .reviewing)
+
+        XCTAssertEqual(PullRequestDetail.roundText(for: pullRequest), "Round 2 of 5")
+    }
+
+    func testStatusDisplayNamesReadAsSentences() {
+        XCTAssertEqual(PullRequestStatus.needsReview.displayName, "Needs review")
+        XCTAssertEqual(PullRequestStatus.awaitingApproval.displayName, "Ready to approve")
+        XCTAssertEqual(PullRequestStatus.waitingOnAuthor.displayName, "Waiting on author")
+        XCTAssertEqual(PullRequestStatus.stopped.displayName, "Stopped")
+    }
+
     func testListeningEventParsesPort() {
         XCTAssertEqual(ServiceListeningEvent.port(fromLine: #"{"event":"listening","port":54321}"#), 54321)
         XCTAssertNil(ServiceListeningEvent.port(fromLine: #"{"event":"other","port":1}"#))

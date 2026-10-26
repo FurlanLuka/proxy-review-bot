@@ -56,9 +56,11 @@ export interface InlineReviewComment {
 	body: string;
 }
 
+export type ReviewEvent = 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES';
+
 export interface ReviewSubmission {
 	commitId: string;
-	event: 'COMMENT' | 'APPROVE';
+	event: ReviewEvent;
 	body: string;
 	comments: InlineReviewComment[];
 }

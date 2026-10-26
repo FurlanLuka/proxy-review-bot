@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { createBot } from '../bot/bot.js';
 import type { BotState } from '../bot/state-view.js';
 import { DEFAULT_SETTINGS } from '../settings/settings.js';
+import { makeDraft } from '../test-support/factories.js';
 import { createTestHarness } from '../test-support/fakes.js';
 import { createApiHandler } from './api.js';
 
@@ -98,5 +99,84 @@ describe('api', () => {
 		expect(bot.getState().isPaused).toBe(true);
 		await call('POST', '/resume');
 		expect(bot.getState().isPaused).toBe(false);
+	});
+});
+
+describe('draft routes', () => {
+	it('GET draft: 404 unknown, 409 no draft; POST post with bad body → 400; discard without draft → 409', async () => {
+		const { call, github, bot } = setUp();
+
+		expect((await call('GET', '/prs/999/draft')).status).toBe(404);
+
+		github.addPullRequest(7);
+		await bot.tick();
+
+		const id = bot.getState().pullRequests[0]?.id;
+
+		expect((await call('GET', `/prs/${id}/draft`)).status).toBe(409);
+		expect((await call('POST', `/prs/${id}/discard`)).status).toBe(409);
+		expect((await call('POST', `/prs/${id}/post`, { nonsense: true })).status).toBe(409);
+	});
+});
+
+describe('draft routes with a held draft', () => {
+	it('GET draft → 200 with the draft; invalid post body → 400 invalid_draft; discard → 200', async () => {
+		const { call, github, bot, claude } = setUp();
+
+		github.addPullRequest(7);
+		await bot.tick();
+
+		const id = bot.getState().pullRequests[0]?.id ?? 0;
+
+		claude.reviewOutcomes.push({ kind: 'result', result: makeDraft({ headRefOid: 'head-1' }) });
+		bot.requestReview(id);
+		await bot.tick();
+		await bot.waitForIdle();
+
+		const draftResponse = await call('GET', `/prs/${id}/draft`);
+
+		expect(draftResponse.status).toBe(200);
+		expect(await draftResponse.json()).toMatchObject({ headSha: 'head-1', filing: 'comment' });
+
+		const invalid = await call('POST', `/prs/${id}/post`, {
+			headSha: 'head-1',
+			event: 'APPROVE',
+			mainReview: '',
+			comments: [],
+			fileComments: [],
+		});
+
+		expect(invalid.status).toBe(400);
+		expect(await invalid.json()).toEqual({
+			error: 'invalid_draft',
+			reason: 'this draft cannot approve',
+		});
+		expect((await call('POST', `/prs/${id}/discard`)).status).toBe(200);
+	});
+
+	it('POST post with a valid edit → 200 ok', async () => {
+		const { call, github, bot, claude } = setUp();
+
+		github.addPullRequest(7);
+		await bot.tick();
+
+		const id = bot.getState().pullRequests[0]?.id ?? 0;
+
+		claude.reviewOutcomes.push({ kind: 'result', result: makeDraft({ headRefOid: 'head-1' }) });
+		bot.requestReview(id);
+		await bot.tick();
+		await bot.waitForIdle();
+
+		const response = await call('POST', `/prs/${id}/post`, {
+			headSha: 'head-1',
+			event: 'COMMENT',
+			mainReview: 'Edited',
+			comments: [],
+			fileComments: [],
+		});
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ ok: true });
+		expect(github.submissions).toHaveLength(1);
 	});
 });

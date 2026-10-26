@@ -2,11 +2,36 @@ import ProxyReviewBotCore
 import SwiftUI
 
 struct SettingsFormView: View {
+    private static let pollIntervalOptions = [30, 60, 120, 300, 900]
+    private static let errorSectionID = "settings-error"
+
+    @ObservedObject var model: BotModel
     @Binding var settings: BotSettings
     let readiness: Readiness?
+    var errorMessage: String?
 
     var body: some View {
+        ScrollViewReader { proxy in
+            form
+                .onChange(of: errorMessage) { _, newErrorMessage in
+                    if newErrorMessage != nil {
+                        withAnimation {
+                            proxy.scrollTo(Self.errorSectionID, anchor: .top)
+                        }
+                    }
+                }
+        }
+    }
+
+    private var form: some View {
         Form {
+            if let errorMessage {
+                Section {
+                    SettingsErrorText(message: errorMessage)
+                }
+                .id(Self.errorSectionID)
+            }
+
             Section("Reviews") {
                 Picker("Mode", selection: $settings.reviewMode) {
                     Text("Manual").tag(ReviewMode.manual)
@@ -21,12 +46,34 @@ struct SettingsFormView: View {
                 }
 
                 if settings.autoApprove == .small {
-                    TextField("Small = under (changed lines)", value: $settings.smallPullRequestLineLimit, format: .number)
+                    LabeledContent("Small PR limit") {
+                        HStack(spacing: 6) {
+                            TextField("Small PR limit", value: $settings.smallPullRequestLineLimit, format: .number)
+                                .labelsHidden()
+                                .frame(width: 60)
+                                .multilineTextAlignment(.trailing)
+
+                            Text("changed lines")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
 
-                Stepper("Max rounds: \(settings.maxRounds)", value: $settings.maxRounds, in: 1...20)
+                LabeledContent("Max rounds") {
+                    HStack(spacing: 6) {
+                        Text("\(settings.maxRounds)")
+                            .monospacedDigit()
 
-                Stepper("Check every \(settings.pollIntervalSeconds) seconds", value: $settings.pollIntervalSeconds, in: 15...3600, step: 15)
+                        Stepper("Max rounds", value: $settings.maxRounds, in: 1...20)
+                            .labelsHidden()
+                    }
+                }
+
+                Picker("Check for PRs", selection: $settings.pollIntervalSeconds) {
+                    ForEach(pollIntervalChoices, id: \.self) { seconds in
+                        Text(Self.pollIntervalTitle(seconds: seconds)).tag(seconds)
+                    }
+                }
             }
 
             Section("Replies") {
@@ -43,19 +90,52 @@ struct SettingsFormView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("System") {
+            Section {
                 LaunchAtLoginToggle()
-                ToolPathField(name: "claude", path: $settings.toolPaths.claude)
-                ToolPathField(name: "gh", path: $settings.toolPaths.gh)
-                ToolPathField(name: "git", path: $settings.toolPaths.git)
+                ToolPathField(label: "Claude path", path: $settings.toolPaths.claude)
+                ToolPathField(label: "gh path", path: $settings.toolPaths.gh)
+                ToolPathField(label: "git path", path: $settings.toolPaths.git)
+            } header: {
+                Text("System")
+            } footer: {
+                Text("Leave empty to find each tool on your PATH.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: true, vertical: false)
             }
 
             if let readiness {
                 Section("Status") {
-                    ReadinessSummaryView(readiness: readiness)
+                    if readiness.checks.isEmpty {
+                        Text(readiness.status == .checking ? "Checking…" : "No checks reported")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(readiness.checks) { check in
+                            SetupCheckRowView(check: check)
+                        }
+                    }
                 }
             }
+
+            UninstallSection(model: model)
         }
         .formStyle(.grouped)
+    }
+
+    private var pollIntervalChoices: [Int] {
+        let current = settings.pollIntervalSeconds
+
+        return Self.pollIntervalOptions.contains(current) ? Self.pollIntervalOptions : (Self.pollIntervalOptions + [current]).sorted()
+    }
+
+    private static func pollIntervalTitle(seconds: Int) -> String {
+        if seconds == 60 {
+            return "Every minute"
+        }
+
+        if seconds < 60 || !seconds.isMultiple(of: 60) {
+            return "Every \(seconds) seconds"
+        }
+
+        return "Every \(seconds / 60) minutes"
     }
 }

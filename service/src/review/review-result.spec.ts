@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'bun:test';
 import { ANCHOR_TIME, makeDraft } from '../test-support/factories.js';
 import envelopeFixture from './fixtures/claude-envelope-success.json';
@@ -112,5 +113,88 @@ describe('parseClaudeOutput', () => {
 		});
 
 		expect(result).toEqual({ kind: 'result', result: { reply: null } });
+	});
+});
+
+describe('parseClaudeOutput on stream-json output', () => {
+	it('recorded stream → result from the final result line', () => {
+		const stdout = readFileSync(
+			new URL('./fixtures/claude-stream-subagents.ndjson', import.meta.url),
+			'utf8',
+		);
+
+		expect(parseReview(stdout)).toEqual({
+			kind: 'result',
+			result: { outcome: 'nothing_new', summary: 'stream fixture', headRefOid: 'abc' },
+		});
+	});
+
+	it('stream cut off before the result line → failed', () => {
+		const stdout = readFileSync(
+			new URL('./fixtures/claude-stream-subagents.ndjson', import.meta.url),
+			'utf8',
+		)
+			.trim()
+			.split('\n')
+			.slice(0, -1)
+			.join('\n');
+
+		expect(parseReview(stdout, { exitCode: 1 }).kind).toBe('failed');
+	});
+});
+
+describe('error detection on stream-json output', () => {
+	const streamLine = (value: unknown): string => JSON.stringify(value);
+	const init = streamLine({ type: 'system', subtype: 'init' });
+
+	it('stream cut off whose tool output mentions a usage limit or login → failed, not paused', () => {
+		const toolOutput = streamLine({
+			type: 'user',
+			message: {
+				content: [
+					{ type: 'tool_result', content: 'Usage limit reached|1793020000 and Not logged in' },
+				],
+			},
+		});
+
+		expect(parseReview([init, toolOutput].join('\n'), { exitCode: 1 }).kind).toBe('failed');
+	});
+
+	it('error result line with a usage limit → usage_limited at that time', () => {
+		const result = streamLine({
+			...envelopeFixture,
+			is_error: true,
+			result: 'Claude AI usage limit reached|1793020000',
+		});
+
+		expect(parseReview([init, result].join('\n'))).toEqual({
+			kind: 'usage_limited',
+			resumeAt: 1793020000 * 1000,
+		});
+	});
+
+	it('error result line with an unknown skill → setup_broken', () => {
+		const result = streamLine({
+			...envelopeFixture,
+			is_error: true,
+			result: 'Unknown skill: proxy:pr-review',
+		});
+
+		expect(parseReview([init, result].join('\n')).kind).toBe('setup_broken');
+	});
+
+	it('successful result whose text mentions a usage limit → still a result', () => {
+		const result = streamLine({
+			...envelopeFixture,
+			result: 'Reviewed the usage limit reached handler',
+		});
+
+		expect(parseReview([init, result].join('\n')).kind).toBe('result');
+	});
+
+	it('plain stderr from a crash before any output → setup_broken when logged out', () => {
+		expect(parseReview('', { exitCode: 1, stderr: 'Not logged in · Please run /login' }).kind).toBe(
+			'setup_broken',
+		);
 	});
 });

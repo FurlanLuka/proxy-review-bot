@@ -4,6 +4,7 @@ public enum PullRequestStatus: String, Codable, Sendable {
     case reviewing
     case waitingOnAuthor = "waiting_on_author"
     case awaitingApproval = "awaiting_approval"
+    case draftReady = "draft_ready"
     case blocked
     case needsYou = "needs_you"
     case done
@@ -16,7 +17,15 @@ public enum PullRequestStatus: String, Codable, Sendable {
     }
 
     public var needsAttention: Bool {
-        self == .awaitingApproval || self == .needsYou || self == .needsReview
+        isWaitingOnYou || self == .needsReview
+    }
+
+    public var isWaitingOnYou: Bool {
+        self == .draftReady || self == .awaitingApproval || self == .needsYou
+    }
+
+    public var hasDraft: Bool {
+        self == .draftReady || self == .awaitingApproval
     }
 
     public var isInReview: Bool {
@@ -25,5 +34,32 @@ public enum PullRequestStatus: String, Codable, Sendable {
 
     public var isStoppable: Bool {
         self != .done && self != .stopped && self != .unknown
+    }
+
+    public var displayName: String {
+        switch self {
+        case .needsReview:
+            return "Needs review"
+        case .awaitingApproval:
+            return "Ready to approve"
+        case .draftReady:
+            return "Draft ready"
+        case .needsYou:
+            return "Needs you"
+        case .queued:
+            return "Queued"
+        case .reviewing:
+            return "Reviewing"
+        case .waitingOnAuthor:
+            return "Waiting on author"
+        case .blocked:
+            return "Blocked"
+        case .done:
+            return "Done"
+        case .stopped:
+            return "Stopped"
+        case .unknown:
+            return "Unknown"
+        }
     }
 }

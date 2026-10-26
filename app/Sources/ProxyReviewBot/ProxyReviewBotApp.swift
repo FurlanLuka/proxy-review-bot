@@ -19,5 +19,15 @@ struct ProxyReviewBotApp: App {
         Settings {
             SettingsView(model: appDelegate.model)
         }
+
+        WindowGroup("Review Draft", id: DraftEditorWindow.id, for: Int.self) { $pullRequestID in
+            if let pullRequestID {
+                DraftEditorWindowView(model: appDelegate.model, pullRequestID: pullRequestID)
+            } else {
+                DraftEditorPlaceholderView()
+            }
+        }
+        .defaultSize(DraftEditorWindow.defaultSize)
+        .windowResizability(.contentMinSize)
     }
 }

@@ -7,12 +7,19 @@ public enum PullRequestDetail {
             return pullRequest.author.map { "Requested by @\($0)" } ?? "Waiting for your go-ahead"
         case .awaitingApproval:
             return pullRequest.summary.map { "Ready to approve: \($0)" } ?? "Ready to approve"
+        case .draftReady:
+            return draftReadyText(for: pullRequest.draft)
         case .needsYou:
             return pullRequest.reason ?? "Needs you"
         case .queued:
             return "Queued"
         case .reviewing:
-            return reviewingText(startedAt: pullRequest.reviewStartedAtDate, now: now)
+            return [
+                reviewingText(startedAt: pullRequest.reviewStartedAtDate, now: now),
+                pullRequest.progress?.advisorsText,
+            ]
+            .compactMap { $0 }
+            .joined(separator: " · ")
         case .waitingOnAuthor:
             return pullRequest.summary.map { "Waiting on author · \($0)" } ?? "Waiting on author"
         case .blocked:
@@ -27,11 +34,31 @@ public enum PullRequestDetail {
     }
 
     public static func roundText(for pullRequest: PullRequest) -> String {
-        "round \(pullRequest.rounds)/\(pullRequest.maxRounds)"
+        "Round \(pullRequest.rounds) of \(pullRequest.maxRounds)"
     }
 
     public static func lineCountText(for pullRequest: PullRequest) -> String {
         "+\(pullRequest.additions) −\(pullRequest.deletions)"
+    }
+
+    private static func draftReadyText(for draft: PullRequestDraftSummary?) -> String {
+        guard let draft else {
+            return "Draft ready"
+        }
+
+        let commentText = draft.commentCount == 1 ? "1 comment" : "\(draft.commentCount) comments"
+        let filingText: String? = switch draft.filing {
+        case .comment:
+            "will comment"
+        case .approve:
+            "will approve"
+        case .unknown:
+            nil
+        }
+
+        return ["Draft ready", commentText, filingText]
+            .compactMap { $0 }
+            .joined(separator: " · ")
     }
 
     private static func reviewingText(startedAt: Date?, now: Date) -> String {

@@ -4,8 +4,10 @@ public struct PullRequestSections: Equatable, Sendable {
     public let inReview: [PullRequest]
 
     public init(pullRequests: [PullRequest]) {
+        let waitingOnYou = pullRequests.filter { $0.status.isWaitingOnYou }
+
         needsReview = pullRequests.filter { $0.status == .needsReview }
-        needsYou = pullRequests.filter { $0.status == .awaitingApproval || $0.status == .needsYou }
+        needsYou = waitingOnYou.filter { $0.status == .draftReady } + waitingOnYou.filter { $0.status != .draftReady }
         inReview = pullRequests.filter { $0.status.isInReview }
     }
 

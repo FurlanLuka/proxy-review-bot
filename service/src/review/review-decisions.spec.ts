@@ -161,6 +161,18 @@ describe('decidePullRequestAction', () => {
 		});
 	});
 
+	it('head moved while a draft is ready → clear it', () => {
+		const tracked = makeTracked({
+			status: 'draft_ready',
+			lastReviewedHead: 'head-1',
+			headChangedAt: ANCHOR_TIME,
+		});
+
+		expect(decide({ tracked, live: makeLive({ headSha: 'head-2' }) })).toEqual({
+			kind: 'clear_approval',
+		});
+	});
+
 	it('PR converted back to draft → none', () => {
 		expect(decide({ live: makeLive({ isDraft: true }) })).toEqual({ kind: 'none' });
 	});
@@ -172,7 +184,7 @@ const decidePosting = (overrides: Partial<Parameters<typeof decidePostingAction>
 		jobHeadSha: 'head-1',
 		jobBaseRefName: 'main',
 		live: { headSha: 'head-1', baseRefName: 'main', state: 'open' },
-		settings: { autoApprove: 'off', smallPullRequestLineLimit: 100 },
+		settings: { autoApprove: 'off', smallPullRequestLineLimit: 100, reviewMode: 'auto' },
 		changedLines: 50,
 		...overrides,
 	});
@@ -185,7 +197,9 @@ describe('decidePostingAction', () => {
 
 	it('auto-approve on + comment filing → still COMMENT, never approves', () => {
 		expect(
-			decidePosting({ settings: { autoApprove: 'on', smallPullRequestLineLimit: 100 } }),
+			decidePosting({
+				settings: { autoApprove: 'on', smallPullRequestLineLimit: 100, reviewMode: 'auto' },
+			}),
 		).toMatchObject({ kind: 'post', event: 'COMMENT' });
 	});
 
@@ -196,7 +210,11 @@ describe('decidePostingAction', () => {
 	});
 
 	it('small threshold: N−1 → approve, N → await, 0 → approve', () => {
-		const settings = { autoApprove: 'small', smallPullRequestLineLimit: 100 } as const;
+		const settings = {
+			autoApprove: 'small',
+			smallPullRequestLineLimit: 100,
+			reviewMode: 'auto',
+		} as const;
 		const result = makeDraft({ filing: 'approve' });
 
 		expect(decidePosting({ result, settings, changedLines: 99 })).toMatchObject({
@@ -231,6 +249,44 @@ describe('decidePostingAction', () => {
 		});
 	});
 
+	it('manual mode → hold the draft for the developer, for comment and approve filings', () => {
+		const settings = {
+			autoApprove: 'on',
+			smallPullRequestLineLimit: 100,
+			reviewMode: 'manual',
+		} as const;
+		const commentDraft = makeDraft();
+		const approveDraft = makeDraft({ filing: 'approve' });
+
+		expect(decidePosting({ settings, result: commentDraft })).toEqual({
+			kind: 'hold_draft',
+			draft: commentDraft,
+		});
+		expect(decidePosting({ settings, result: approveDraft })).toEqual({
+			kind: 'hold_draft',
+			draft: approveDraft,
+		});
+	});
+
+	it('manual mode still records nothing new and discards a moved head', () => {
+		const settings = {
+			autoApprove: 'off',
+			smallPullRequestLineLimit: 100,
+			reviewMode: 'manual',
+		} as const;
+
+		expect(
+			decidePosting({
+				settings,
+				result: { outcome: 'nothing_new', headRefOid: 'head-1', summary: 'Same' },
+			}).kind,
+		).toBe('record_nothing_new');
+		expect(
+			decidePosting({ settings, live: { headSha: 'head-2', baseRefName: 'main', state: 'open' } })
+				.kind,
+		).toBe('discard_draft');
+	});
+
 	it('post and await_approval carry the draft', () => {
 		const draft = makeDraft({ filing: 'approve' });
 
@@ -250,7 +306,7 @@ describe('decidePostingAction', () => {
 		).toEqual({ kind: 'record_nothing_new', summary: 'Same' });
 		expect(
 			decidePosting({ result: { outcome: 'blocked', reason: 'diff_mismatch', summary: 'Odd' } }),
-		).toEqual({ kind: 'block', summary: 'diff_mismatch: Odd' });
+		).toEqual({ kind: 'block', summary: "Diff didn't match GitHub: Odd" });
 		expect(decidePosting({ result: { outcome: 'failed', summary: 'Boom' } })).toEqual({
 			kind: 'fail',
 			summary: 'Boom',
