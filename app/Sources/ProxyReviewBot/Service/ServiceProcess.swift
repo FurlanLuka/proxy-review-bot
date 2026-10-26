@@ -105,7 +105,14 @@ final class ServiceProcess {
                 }
             },
             PipeLineReader(pipe: standardErrorPipe) { line in
-                Logger.service.error("service stderr: \(line, privacy: .public)")
+                switch ServiceLogLine.level(of: line) {
+                case .error:
+                    Logger.service.error("service: \(line, privacy: .public)")
+                case .warning:
+                    Logger.service.warning("service: \(line, privacy: .public)")
+                case .info:
+                    Logger.service.info("service: \(line, privacy: .public)")
+                }
             },
         ]
 

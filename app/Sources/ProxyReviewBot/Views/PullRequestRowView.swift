@@ -5,11 +5,7 @@ struct PullRequestRowView: View {
     @ObservedObject var model: BotModel
     let pullRequest: PullRequest
     @State private var isProgressExpanded: Bool
-    @State private var isHovered = false
     @State private var isConfirmingStop = false
-    @FocusState private var isStopFocused: Bool
-
-    @Environment(\.accessibilityReduceMotion) private var isReducingMotion
 
     init(model: BotModel, pullRequest: PullRequest, isProgressExpanded: Bool = false) {
         self.model = model
@@ -34,45 +30,67 @@ struct PullRequestRowView: View {
                 progressSection(progress)
             }
 
-            if hasActions {
-                HStack(spacing: 6) {
-                    PullRequestActionsView(model: model, pullRequest: pullRequest)
-
-                    Spacer(minLength: 0)
+            if isConfirmingStop {
+                stopConfirmation
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    actionsRow(isStopLabeled: true, isCompact: false)
+                    actionsRow(isStopLabeled: false, isCompact: false)
+                    actionsRow(isStopLabeled: false, isCompact: true)
                 }
             }
         }
         .padding(12)
-        .card(isHighlighted: isHovered && pullRequest.status.isStoppable)
-        .onHover { isHovered = $0 }
+        .card()
         .accessibilityElement(children: .contain)
         .stopActions(isAvailable: pullRequest.status.isStoppable) {
             isConfirmingStop = true
         }
-        .confirmationDialog("Stop reviewing \(pullRequest.shortName)?", isPresented: $isConfirmingStop, titleVisibility: .visible) {
-            Button("Stop Reviewing", role: .destructive) {
-                model.stop(pullRequest)
-            }
-
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The bot stops working on this PR. It picks it up again when someone re-requests your review.")
-        }
         .disabled(isBusy)
-        .animation(isReducingMotion ? nil : .easeOut(duration: 0.15), value: isHovered)
+    }
+
+    private var stopConfirmation: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Stop reviewing this PR? The bot picks it up again when someone re-requests your review.")
+                .font(MenuStyle.metaFont)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 6) {
+                Spacer(minLength: 0)
+
+                Button("Cancel") {
+                    isConfirmingStop = false
+                }
+                .buttonStyle(PillButtonStyle())
+                .keyboardShortcut(.cancelAction)
+
+                Button(role: .destructive) {
+                    isConfirmingStop = false
+                    model.stop(pullRequest)
+                } label: {
+                    Label("Stop Reviewing", systemImage: "stop.circle")
+                }
+                .buttonStyle(PillButtonStyle(isProminent: true, tint: Palette.rose))
+            }
+        }
+    }
+
+    private func actionsRow(isStopLabeled: Bool, isCompact: Bool) -> some View {
+        HStack(spacing: 6) {
+            PullRequestActionsView(model: model, pullRequest: pullRequest, isCompact: isCompact)
+
+            Spacer(minLength: 0)
+
+            if pullRequest.status.isStoppable {
+                stopButton(isLabeled: isStopLabeled)
+            }
+        }
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 0) {
-            headerSummary
-
-            stopButton
-        }
-    }
-
-    private var headerSummary: some View {
         HStack(alignment: .top, spacing: 10) {
-            StatusGlyph(status: pullRequest.status)
+            StatusGlyph(status: pullRequest.hasFailedReview ? .needsYou : pullRequest.status)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(pullRequest.title)
@@ -112,30 +130,20 @@ struct PullRequestRowView: View {
         .accessibilityElement(children: .combine)
     }
 
-    private var isStopVisible: Bool {
-        isHovered || isStopFocused
-    }
-
     private var isBusy: Bool {
         model.busyPullRequestIDs.contains(pullRequest.id)
     }
 
-    private var hasActions: Bool {
-        [.needsReview, .awaitingApproval, .draftReady, .needsYou].contains(pullRequest.status)
-    }
-
-    @ViewBuilder
-    private var stopButton: some View {
-        if pullRequest.status.isStoppable {
-            IconButton(systemName: "xmark", label: "Stop Reviewing This PR", help: "Stop Reviewing This PR", role: .destructive, size: 20) {
-                isConfirmingStop = true
-            }
-            .focused($isStopFocused)
-            .padding(.trailing, -8)
-            .opacity(isStopVisible ? 1 : 0)
-            .allowsHitTesting(isStopVisible)
-            .accessibilityHidden(!isStopVisible)
+    private func stopButton(isLabeled: Bool) -> some View {
+        Button(role: .destructive) {
+            isConfirmingStop = true
+        } label: {
+            Label("Stop", systemImage: "stop.circle")
+                .labelStyle(isLabeled ? AnyLabelStyle(.titleAndIcon) : AnyLabelStyle(.iconOnly))
         }
+        .buttonStyle(PillButtonStyle())
+        .help("Stop Reviewing This PR")
+        .accessibilityLabel("Stop Reviewing This PR")
     }
 
     private var diffStat: some View {

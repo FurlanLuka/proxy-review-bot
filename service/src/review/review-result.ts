@@ -2,8 +2,10 @@ import { z } from 'zod';
 
 const INLINE_COMMENT_SCHEMA = z.object({
 	path: z.string().min(1),
-	line: z.number().int().positive(),
-	side: z.enum(['LEFT', 'RIGHT']),
+	line: z
+		.union([z.number(), z.string().regex(/^\d+$/).transform(Number)])
+		.pipe(z.number().int().positive()),
+	side: z.enum(['LEFT', 'RIGHT']).default('RIGHT'),
 	body: z.string().min(1),
 });
 
@@ -17,13 +19,13 @@ export const REVIEW_RESULT_SCHEMA = z.discriminatedUnion('outcome', [
 		outcome: z.literal('drafted'),
 		filing: z.enum(['approve', 'comment']),
 		headRefOid: z.string().min(1),
-		baseRefName: z.string().min(1),
-		targetTipOid: z.string(),
+		baseRefName: z.string().default(''),
+		targetTipOid: z.string().default(''),
 		summary: z.string().min(1),
-		mainReview: z.string(),
-		comments: z.array(INLINE_COMMENT_SCHEMA),
-		fileComments: z.array(FILE_COMMENT_SCHEMA),
-		coverage: z.string(),
+		mainReview: z.string().default(''),
+		comments: z.array(INLINE_COMMENT_SCHEMA).default([]),
+		fileComments: z.array(FILE_COMMENT_SCHEMA).default([]),
+		coverage: z.string().default(''),
 	}),
 	z.object({
 		outcome: z.literal('nothing_new'),
@@ -111,7 +113,7 @@ export type ClaudeRunOutcome<Result> =
 	| { kind: 'result'; result: Result }
 	| { kind: 'usage_limited'; resumeAt: number }
 	| { kind: 'setup_broken'; message: string }
-	| { kind: 'failed'; summary: string };
+	| { kind: 'failed'; summary: string; schemaIssues?: string[] };
 
 export interface ClaudeProcessOutput {
 	exitCode: number | null;
@@ -167,6 +169,14 @@ const parseEnvelope = (stdout: string): z.infer<typeof ENVELOPE_SCHEMA> | null =
 	return null;
 };
 
+const describeSchemaIssues = (error: z.ZodError): string[] => {
+	return error.issues.map((issue) => {
+		const path = issue.path.length === 0 ? 'result' : issue.path.join('.');
+
+		return `${path}: ${issue.message}`;
+	});
+};
+
 const readStructuredOutput = (envelope: z.infer<typeof ENVELOPE_SCHEMA>): unknown => {
 	if (envelope.structured_output !== undefined) {
 		return envelope.structured_output;
@@ -204,7 +214,7 @@ const buildErrorText = (
 
 interface ParseClaudeOutputParams<Result> {
 	output: ClaudeProcessOutput;
-	schema: z.ZodType<Result>;
+	schema: z.ZodType<Result, z.ZodTypeDef, unknown>;
 	now: number;
 }
 
@@ -242,7 +252,15 @@ export const parseClaudeOutput = <Result>({
 
 	const parsed = schema.safeParse(readStructuredOutput(envelope));
 
-	return parsed.success
-		? { kind: 'result', result: parsed.data }
-		: { kind: 'failed', summary: 'Claude returned a result that does not match the schema' };
+	if (parsed.success) {
+		return { kind: 'result', result: parsed.data };
+	}
+
+	const schemaIssues = describeSchemaIssues(parsed.error);
+
+	return {
+		kind: 'failed',
+		summary: `Claude's result had the wrong shape (${schemaIssues.slice(0, 3).join('; ')})`,
+		schemaIssues,
+	};
 };

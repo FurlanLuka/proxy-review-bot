@@ -22,6 +22,7 @@ export interface PullRequestView {
 	headSha: string | null;
 	summary: string | null;
 	reason: string | null;
+	retryAt: number | null;
 	reviewStartedAt: number | null;
 	updatedAt: number;
 	progress: ReviewProgress | null;
@@ -45,7 +46,7 @@ export interface BotState {
 
 const toView = (
 	tracked: TrackedPullRequest,
-	maxRounds: number,
+	settings: Settings,
 	progress: ReviewProgress | null,
 ): PullRequestView => ({
 	id: tracked.id,
@@ -57,12 +58,18 @@ const toView = (
 	author: tracked.author,
 	status: tracked.status,
 	rounds: tracked.rounds,
-	maxRounds,
+	maxRounds: settings.maxRounds,
 	additions: tracked.additions,
 	deletions: tracked.deletions,
 	headSha: tracked.headSha,
 	summary: tracked.lastSummary,
 	reason: tracked.lastError,
+	retryAt:
+		settings.reviewMode === 'auto' &&
+		tracked.status === 'waiting_on_author' &&
+		tracked.lastError !== null
+			? tracked.nextEligibleAt
+			: null,
 	reviewStartedAt: tracked.reviewStartedAt,
 	updatedAt: tracked.updatedAt,
 	progress,
@@ -103,6 +110,6 @@ export const buildBotState = ({
 		settings,
 		pullRequests: trackedPullRequests
 			.filter((tracked) => tracked.status !== 'done' || tracked.updatedAt >= visibleSince)
-			.map((tracked) => toView(tracked, settings.maxRounds, progressById.get(tracked.id) ?? null)),
+			.map((tracked) => toView(tracked, settings, progressById.get(tracked.id) ?? null)),
 	};
 };

@@ -14,6 +14,7 @@ import { syncPullRequests } from './sync.js';
 const READINESS_INTERVAL_MS = 10 * 60_000;
 const PAUSED_FLAG = 'is_paused';
 const USAGE_LIMIT_FLAG = 'usage_limited_until';
+const MAX_PARALLEL_REVIEWS = 3;
 
 export interface Bot {
 	tick(): Promise<void>;
@@ -30,18 +31,25 @@ export interface Bot {
 	recheckReadiness(): Promise<void>;
 }
 
+interface ReplyProgress {
+	id: number;
+	progress: ReviewProgress;
+}
+
 export const createBot = (dependencies: BotDependencies): Bot => {
 	const { store, settingsStore, logger, now } = dependencies;
 	const runtime: BotRuntime = {
 		readiness: { status: 'checking', checks: [] },
 		viewerLogin: null,
 		readinessCheckedAt: null,
-		isJobRunning: false,
+		isReplyJobRunning: false,
 		isSyncing: false,
 	};
-	const jobs = { current: Promise.resolve() };
+	const runningJobs = new Set<Promise<void>>();
+	const reviewingIds = new Set<number>();
 	const approvingIds = new Set<number>();
-	const progressById = new Map<number, ReviewProgress>();
+	const reviewProgressById = new Map<number, ReviewProgress>();
+	const replyProgress: { current: ReplyProgress | null } = { current: null };
 
 	const isPaused = (): boolean => store.getFlag(PAUSED_FLAG) === 'true';
 
@@ -65,8 +73,10 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 
 	const handleJobOutcome = (outcome: JobOutcome | null): void => {
 		if (outcome?.kind === 'usage_limited') {
-			store.setFlag(USAGE_LIMIT_FLAG, String(outcome.resumeAt));
-			logger.warn('usage_limited', { resumeAt: outcome.resumeAt });
+			const resumeAt = Math.max(outcome.resumeAt, getUsageLimitedUntil() ?? 0);
+
+			store.setFlag(USAGE_LIMIT_FLAG, String(resumeAt));
+			logger.warn('usage_limited', { resumeAt });
 		}
 
 		if (outcome?.kind === 'setup_broken') {
@@ -75,59 +85,87 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 		}
 	};
 
-	const findNextQueued = (): TrackedPullRequest | undefined => {
+	const findQueued = (): TrackedPullRequest[] => {
 		return store
 			.listPullRequests()
-			.filter((tracked) => tracked.status === 'queued')
-			.sort((left, right) => left.updatedAt - right.updatedAt)[0];
+			.filter((tracked) => tracked.status === 'queued' && !reviewingIds.has(tracked.id))
+			.sort((left, right) => left.updatedAt - right.updatedAt);
 	};
 
-	const runNextJob = async (viewerLogin: string): Promise<void> => {
-		const nextQueued = findNextQueued();
-
-		if (nextQueued !== undefined) {
-			handleJobOutcome(
-				await runReviewJob({
-					dependencies,
-					tracked: nextQueued,
-					viewerLogin,
-					isPaused,
-					onProgress: (progress) => progressById.set(nextQueued.id, progress),
-				}),
-			);
-
-			return;
-		}
-
-		if (settingsStore.get().answerQuestions) {
-			handleJobOutcome(
-				await runNextReplyJob({
-					dependencies,
-					viewerLogin,
-					isPaused,
-					onProgress: (id, progress) => progressById.set(id, progress),
-				}),
-			);
-		}
-	};
-
-	const startNextJob = (viewerLogin: string): void => {
-		runtime.isJobRunning = true;
-		jobs.current = runNextJob(viewerLogin)
+	const trackJob = (job: Promise<JobOutcome | null>, onSettled: () => void): void => {
+		const tracked: Promise<void> = job
+			.then(handleJobOutcome)
 			.catch((error: unknown) => logger.error('job_failed', { error }))
 			.finally(() => {
-				progressById.clear();
-				runtime.isJobRunning = false;
+				onSettled();
+				runningJobs.delete(tracked);
 			});
+
+		runningJobs.add(tracked);
+	};
+
+	const startReviewJob = (tracked: TrackedPullRequest, viewerLogin: string): void => {
+		reviewingIds.add(tracked.id);
+		trackJob(
+			runReviewJob({
+				dependencies,
+				tracked,
+				viewerLogin,
+				isPaused,
+				onProgress: (progress) => reviewProgressById.set(tracked.id, progress),
+			}),
+			() => {
+				reviewingIds.delete(tracked.id);
+				reviewProgressById.delete(tracked.id);
+			},
+		);
+	};
+
+	const startReplyJob = (viewerLogin: string): void => {
+		runtime.isReplyJobRunning = true;
+		trackJob(
+			runNextReplyJob({
+				dependencies,
+				viewerLogin,
+				isPaused,
+				onProgress: (id, progress) => {
+					replyProgress.current = { id, progress };
+				},
+			}),
+			() => {
+				runtime.isReplyJobRunning = false;
+				replyProgress.current = null;
+			},
+		);
+	};
+
+	const buildProgressById = (): Map<number, ReviewProgress> => {
+		const answering = replyProgress.current;
+		const progressById = new Map<number, ReviewProgress>(
+			answering === null ? [] : [[answering.id, answering.progress]],
+		);
+
+		for (const [id, progress] of reviewProgressById) {
+			progressById.set(id, progress);
+		}
+
+		return progressById;
+	};
+
+	const startJobs = (viewerLogin: string): void => {
+		const freeSlots = MAX_PARALLEL_REVIEWS - reviewingIds.size;
+
+		for (const tracked of findQueued().slice(0, Math.max(0, freeSlots))) {
+			startReviewJob(tracked, viewerLogin);
+		}
+
+		if (!runtime.isReplyJobRunning && settingsStore.get().answerQuestions) {
+			startReplyJob(viewerLogin);
+		}
 	};
 
 	const canRunJobs = (): boolean => {
-		return (
-			!runtime.isJobRunning &&
-			runtime.readiness.status === 'ready' &&
-			!isPaused() &&
-			getUsageLimitedUntil() === null
-		);
+		return runtime.readiness.status === 'ready' && !isPaused() && getUsageLimitedUntil() === null;
 	};
 
 	const tick = async (): Promise<void> => {
@@ -155,7 +193,7 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 			await syncPullRequests({ dependencies, viewerLogin, isPaused: isPaused() });
 
 			if (canRunJobs()) {
-				startNextJob(viewerLogin);
+				startJobs(viewerLogin);
 			}
 		} catch (error) {
 			logger.error('tick_failed', { error });
@@ -211,7 +249,9 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 	return {
 		tick,
 		waitForIdle: async () => {
-			await jobs.current;
+			while (runningJobs.size > 0) {
+				await Promise.all(runningJobs);
+			}
 		},
 		getState: () =>
 			buildBotState({
@@ -221,7 +261,7 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 				usageLimitedUntil: getUsageLimitedUntil(),
 				readiness: runtime.readiness,
 				settings: settingsStore.get(),
-				progressById,
+				progressById: buildProgressById(),
 				now: now(),
 			}),
 		requestReview: (id) =>

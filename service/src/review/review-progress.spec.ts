@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { applyStreamLine, createReviewProgress, labelForAgentType } from './review-progress.js';
+import {
+	applyStreamLine,
+	createReviewProgress,
+	labelForAgentType,
+	nameSubagent,
+} from './review-progress.js';
 
 const RECORDED_STREAM = readFileSync(
 	new URL('./fixtures/claude-stream-subagents.ndjson', import.meta.url),
@@ -29,14 +34,15 @@ describe('applyStreamLine on a recorded Claude Code stream', () => {
 		const progress = replay(RECORDED_STREAM);
 
 		expect(
-			progress.subagents.map(({ agentType, description, status }) => ({
+			progress.subagents.map(({ agentType, label, description, status }) => ({
 				agentType,
+				label,
 				description,
 				status,
 			})),
 		).toEqual([
-			{ agentType: 'Explore', description: 'List files', status: 'completed' },
-			{ agentType: 'general-purpose', description: 'Say hello', status: 'completed' },
+			{ agentType: 'Explore', label: 'Explore', description: 'List files', status: 'completed' },
+			{ agentType: 'general-purpose', label: 'Say hello', description: '', status: 'completed' },
 		]);
 		expect(progress.subagents.every((subagent) => subagent.finishedAt !== null)).toBe(true);
 	});
@@ -125,6 +131,51 @@ describe('labelForAgentType', () => {
 		expect(labelForAgentType('proxy:test-architect')).toBe('Tests');
 		expect(labelForAgentType('other-plugin:security')).toBe('security');
 		expect(labelForAgentType('Explore')).toBe('Explore');
+	});
+});
+
+describe('background shell tasks', () => {
+	it('a background Bash command → not listed as a subagent; a local agent task still is', () => {
+		const lines = [
+			{
+				subtype: 'task_started',
+				tool_use_id: 'b1',
+				task_type: 'local_bash',
+				description: 'Pin snapshot',
+			},
+			{ subtype: 'task_notification', tool_use_id: 'b1', status: 'completed' },
+			{
+				subtype: 'task_started',
+				tool_use_id: 'a1',
+				task_type: 'local_agent',
+				subagent_type: 'proxy:architect',
+				description: 'Design',
+			},
+		].map((event) => JSON.stringify({ type: 'system', ...event }));
+		const progress = lines.reduce(
+			(current, line) => applyStreamLine(current, line, 1),
+			createReviewProgress(0),
+		);
+
+		expect(progress.subagents.map((subagent) => subagent.label)).toEqual(['Architecture']);
+	});
+});
+
+describe('nameSubagent', () => {
+	it('a named agent type → its label, with the description kept as detail', () => {
+		expect(nameSubagent('proxy:architect', 'Module boundaries')).toEqual({
+			label: 'Architecture',
+			description: 'Module boundaries',
+		});
+	});
+
+	it('no type or a generic type → the task description becomes the name', () => {
+		expect(nameSubagent(undefined, 'Correctness pass')).toEqual({
+			label: 'Correctness pass',
+			description: '',
+		});
+		expect(nameSubagent('general-purpose', 'Security pass').label).toBe('Security pass');
+		expect(nameSubagent('fork', '  ').label).toBe('Helper');
 	});
 });
 

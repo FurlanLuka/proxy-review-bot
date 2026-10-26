@@ -56,3 +56,15 @@ struct PillButtonStyle: ButtonStyle {
         return isPressed ? 0.75 : 1
     }
 }
+
+struct AnyLabelStyle: LabelStyle {
+    private let makeLabel: (Configuration) -> AnyView
+
+    init(_ style: some LabelStyle) {
+        makeLabel = { AnyView(style.makeBody(configuration: $0)) }
+    }
+
+    func makeBody(configuration: Configuration) -> some View {
+        makeLabel(configuration)
+    }
+}

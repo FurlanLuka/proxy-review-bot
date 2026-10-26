@@ -146,7 +146,7 @@ final class BotModel: ObservableObject {
         }
     }
 
-    private func perform(_ action: ServiceAction, on pullRequest: PullRequest?) {
+    func perform(_ action: ServiceAction, on pullRequest: PullRequest?) {
         guard let client else {
             actionMessage = "The service isn't running"
             return

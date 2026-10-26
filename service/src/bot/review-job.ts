@@ -1,3 +1,4 @@
+import { runInClone } from '../clones/clones.js';
 import { buildFailureUpdate, buildPostingUpdate } from '../review/pull-request-updates.js';
 import { decidePostingAction } from '../review/review-decisions.js';
 import type { ReviewProgress } from '../review/review-progress.js';
@@ -159,12 +160,10 @@ export const runReviewJob = async (params: RunReviewJobParams): Promise<JobOutco
 		});
 		jobLogger.info('review_job_started', { url: tracked.url, headSha: live.headSha });
 
-		const clonePath = await clones.prepareClone(tracked);
-		const outcome = await claude.runReview({
-			pullRequestUrl: tracked.url,
-			clonePath,
-			onProgress: params.onProgress,
-		});
+		const clone = await clones.prepareClone(tracked);
+		const outcome = await runInClone(clone, (clonePath) =>
+			claude.runReview({ pullRequestUrl: tracked.url, clonePath, onProgress: params.onProgress }),
+		);
 		const release = findRelease(params, false);
 
 		if (release !== null) {
@@ -197,7 +196,13 @@ export const runReviewJob = async (params: RunReviewJobParams): Promise<JobOutco
 		}
 
 		writeFinalUpdate(params, update);
-		jobLogger.info('review_job_finished', { status: update.status, error: update.lastError });
+		const finishedFields = { status: update.status, error: update.lastError };
+
+		if (update.lastError) {
+			jobLogger.warn('review_job_finished', finishedFields);
+		} else {
+			jobLogger.info('review_job_finished', finishedFields);
+		}
 	} catch (error) {
 		jobLogger.error('review_job_failed', { error });
 		writeFinalUpdate(params, buildFailureUpdate(describeError(error), now()));

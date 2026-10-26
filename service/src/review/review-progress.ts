@@ -29,6 +29,8 @@ const AGENT_LABELS: Record<string, string> = {
 	'proxy:test-architect': 'Tests',
 };
 
+const GENERIC_AGENT_TYPES = new Set(['general-purpose', 'fork']);
+
 const STATUS_PAYLOAD_SCHEMA = z.object({
 	phase: z.string().max(40).optional(),
 	message: z.string().min(1).max(200),
@@ -41,6 +43,7 @@ const STREAM_EVENT_SCHEMA = z.object({
 	tool_use_id: z.string().optional(),
 	description: z.string().optional(),
 	subagent_type: z.string().optional(),
+	task_type: z.string().optional(),
 	status: z.string().optional(),
 	message: z
 		.object({ content: z.union([z.string(), z.array(z.record(z.unknown()))]).optional() })
@@ -61,6 +64,22 @@ export const createReviewProgress = (
 
 export const labelForAgentType = (agentType: string): string => {
 	return AGENT_LABELS[agentType] ?? agentType.replace(/^[\w-]+:/, '');
+};
+
+interface SubagentNaming {
+	label: string;
+	description: string;
+}
+
+export const nameSubagent = (
+	agentType: string | undefined,
+	description: string,
+): SubagentNaming => {
+	if (agentType !== undefined && !GENERIC_AGENT_TYPES.has(agentType)) {
+		return { label: labelForAgentType(agentType), description };
+	}
+
+	return { label: description.trim() || 'Helper', description: '' };
 };
 
 const parseEvent = (line: string): StreamEvent | null => {
@@ -126,9 +145,10 @@ const applyTaskEvent = (
 	}
 
 	const isKnown = progress.subagents.some((subagent) => subagent.id === id);
+	const isShellTask = event.task_type !== undefined && event.task_type !== 'local_agent';
 
-	if (event.subtype === 'task_started' && !isKnown) {
-		const agentType = event.subagent_type ?? 'subagent';
+	if (event.subtype === 'task_started' && !isKnown && !isShellTask) {
+		const naming = nameSubagent(event.subagent_type, event.description ?? '');
 
 		return {
 			...progress,
@@ -136,9 +156,8 @@ const applyTaskEvent = (
 				...progress.subagents,
 				{
 					id,
-					agentType,
-					label: labelForAgentType(agentType),
-					description: event.description ?? '',
+					agentType: event.subagent_type ?? 'general-purpose',
+					...naming,
 					status: 'running',
 					currentStep: null,
 					startedAt: now,

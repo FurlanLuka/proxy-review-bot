@@ -3,7 +3,7 @@ import { createBotMarker } from '../review/bot-marker.js';
 import { QUIET_PERIOD_MS } from '../review/review-decisions.js';
 import { DEFAULT_SETTINGS } from '../settings/settings.js';
 import { makeComment, makeDraft, makeThread } from '../test-support/factories.js';
-import { createTestHarness, VIEWER_LOGIN } from '../test-support/fakes.js';
+import { createTestHarness, expectNoLeakedWorktrees, VIEWER_LOGIN } from '../test-support/fakes.js';
 import type { TestHarness } from '../test-support/fakes.js';
 import { createBot } from './bot.js';
 
@@ -14,16 +14,21 @@ const setUp = (settings = {}) => {
 
 	const bot = createBot(harness.dependencies);
 
+	const settle = async (): Promise<void> => {
+		await bot.waitForIdle();
+		expectNoLeakedWorktrees(harness);
+	};
+
 	const tickAndSettle = async (): Promise<void> => {
 		await bot.tick();
-		await bot.waitForIdle();
+		await settle();
 	};
 
 	const statusOf = (number: number) => {
 		return bot.getState().pullRequests.find((pullRequest) => pullRequest.number === number);
 	};
 
-	return { ...harness, bot, tickAndSettle, statusOf };
+	return { ...harness, bot, settle, tickAndSettle, statusOf };
 };
 
 const draftedFor = (headSha: string, filing: 'approve' | 'comment') => ({
@@ -149,6 +154,55 @@ describe('bot in auto mode', () => {
 		expect(setup.github.submissions[0]?.body).toContain('**src/retry.ts:12**');
 	});
 
+	it('manual mode: a failed review shows no retry time and returns to Ready to review after the backoff', async () => {
+		const setup = setUp({ reviewMode: 'manual' });
+
+		setup.github.addPullRequest(7);
+		await setup.tickAndSettle();
+		setup.claude.reviewOutcomes.push({ kind: 'failed', summary: 'Claude run timed out' });
+		setup.bot.requestReview(setup.statusOf(7)?.id ?? 0);
+		await setup.tickAndSettle();
+
+		expect(setup.statusOf(7)).toMatchObject({
+			status: 'waiting_on_author',
+			reason: 'Claude run timed out',
+			retryAt: null,
+		});
+
+		setup.clock.now += 11 * 60_000;
+		await setup.tickAndSettle();
+
+		expect(setup.statusOf(7)?.status).toBe('needs_review');
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+	});
+
+	it('Review again on a failed round runs now and keeps the round count', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+		setup.github.addPullRequest(7);
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.tickAndSettle();
+		pushCommit(setup, 7, 'head-2');
+		await setup.tickAndSettle();
+		setup.clock.now += QUIET_PERIOD_MS;
+		setup.claude.reviewOutcomes.push({ kind: 'failed', summary: 'Claude run timed out' });
+		await setup.tickAndSettle();
+
+		expect(setup.statusOf(7)).toMatchObject({ status: 'waiting_on_author', rounds: 1 });
+
+		setup.claude.reviewOutcomes.push(draftedFor('head-2', 'comment'));
+
+		expect(setup.bot.requestReview(setup.statusOf(7)?.id ?? 0)).toBe('ok');
+
+		await setup.tickAndSettle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(3);
+		expect(setup.statusOf(7)).toMatchObject({
+			status: 'waiting_on_author',
+			rounds: 2,
+			reason: null,
+		});
+	});
+
 	it('failed run backs off, then gives up after two attempts on the same head', async () => {
 		const setup = setUp({ reviewMode: 'auto' });
 
@@ -159,6 +213,8 @@ describe('bot in auto mode', () => {
 		expect(setup.statusOf(7)).toMatchObject({
 			status: 'waiting_on_author',
 			reason: 'Claude run timed out',
+			retryAt: setup.clock.now + 10 * 60_000,
+			rounds: 0,
 		});
 
 		await setup.tickAndSettle();
@@ -183,9 +239,9 @@ describe('bot in auto mode', () => {
 		const setup = setUp({ reviewMode: 'auto' });
 
 		setup.github.addPullRequest(7);
-		setup.github.addPullRequest(8);
 		setup.claude.reviewOutcomes.push({ kind: 'usage_limited', resumeAt: setup.clock.now + 60_000 });
 		await setup.tickAndSettle();
+		setup.github.addPullRequest(8);
 		await setup.tickAndSettle();
 
 		expect(setup.claude.reviewCalls).toHaveLength(1);
@@ -193,10 +249,13 @@ describe('bot in auto mode', () => {
 		expect(setup.statusOf(7)?.status).toBe('queued');
 
 		setup.clock.now += 61_000;
-		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.claude.reviewOutcomes.push(
+			draftedFor('head-1', 'comment'),
+			draftedFor('head-1', 'comment'),
+		);
 		await setup.tickAndSettle();
 
-		expect(setup.claude.reviewCalls).toHaveLength(2);
+		expect(setup.claude.reviewCalls).toHaveLength(3);
 	});
 
 	it('developer reviews by hand → bot takes its hands off', async () => {
@@ -280,6 +339,129 @@ describe('bot in auto mode', () => {
 	});
 });
 
+describe('parallel reviews', () => {
+	it('four queued PRs → three review at once, the fourth starts when a slot frees up', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+		const gate = createGate();
+
+		for (const number of [7, 8, 9, 10]) {
+			setup.github.addPullRequest(number);
+		}
+
+		setup.claude.reviewGate = gate.promise;
+		setup.claude.reviewOutcomes.push(...[1, 2, 3, 4].map(() => draftedFor('head-1', 'comment')));
+		await setup.bot.tick();
+		await setup.claude.waitForReviewCall(3);
+		await setup.bot.tick();
+
+		const statuses = [7, 8, 9, 10].map((number) => setup.statusOf(number)?.status);
+
+		expect(setup.claude.reviewCalls).toHaveLength(3);
+		expect(statuses.filter((status) => status === 'reviewing')).toHaveLength(3);
+		expect(statuses.filter((status) => status === 'queued')).toHaveLength(1);
+
+		gate.open();
+		await setup.settle();
+		await setup.tickAndSettle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(4);
+		expect(new Set(setup.claude.reviewCalls).size).toBe(4);
+	});
+
+	it('three in flight, one hits the usage limit → only it is queued again, the others finish, the fourth waits', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+		const gate = createGate();
+
+		for (const number of [7, 8, 9, 10]) {
+			setup.github.addPullRequest(number);
+		}
+
+		setup.claude.reviewGate = gate.promise;
+		setup.claude.reviewOutcomes.push(
+			{ kind: 'usage_limited', resumeAt: setup.clock.now + 60_000 },
+			draftedFor('head-1', 'comment'),
+			draftedFor('head-1', 'comment'),
+		);
+		await setup.bot.tick();
+		await setup.claude.waitForReviewCall(3);
+		gate.open();
+		await setup.settle();
+		await setup.tickAndSettle();
+
+		const reviewedNumbers = setup.claude.reviewCalls.map(numberOf);
+		const [limited, ...finished] = reviewedNumbers;
+		const waiting = [7, 8, 9, 10].find((number) => !reviewedNumbers.includes(number));
+
+		expect(setup.claude.reviewCalls).toHaveLength(3);
+		expect(setup.statusOf(limited ?? 0)?.status).toBe('queued');
+		expect(finished.map((number) => setup.statusOf(number)?.status)).toEqual([
+			'waiting_on_author',
+			'waiting_on_author',
+		]);
+		expect(setup.statusOf(waiting ?? 0)?.status).toBe('queued');
+
+		setup.clock.now += 61_000;
+		setup.claude.reviewOutcomes.push(
+			draftedFor('head-1', 'comment'),
+			draftedFor('head-1', 'comment'),
+		);
+		await setup.tickAndSettle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(5);
+	});
+
+	it('two jobs hit the usage limit → the later resume time wins', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+		const gate = createGate();
+		const start = setup.clock.now;
+
+		setup.github.addPullRequest(7);
+		setup.github.addPullRequest(8);
+		setup.claude.reviewGate = gate.promise;
+		setup.claude.reviewOutcomes.push(
+			{ kind: 'usage_limited', resumeAt: start + 120_000 },
+			{ kind: 'usage_limited', resumeAt: start + 60_000 },
+		);
+		await setup.bot.tick();
+		await setup.claude.waitForReviewCall(2);
+		gate.open();
+		await setup.settle();
+
+		expect(setup.bot.getState().usageLimitedUntil).toBe(start + 120_000);
+
+		setup.clock.now = start + 90_000;
+		await setup.tickAndSettle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+	});
+
+	it('review A finishes while B runs → A shows no progress, B keeps its own', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+		const firstGate = createGate();
+		const secondGate = createGate();
+
+		setup.github.addPullRequest(7);
+		setup.github.addPullRequest(8);
+		setup.claude.reviewGatesByUrl.set(urlOf(7), firstGate.promise);
+		setup.claude.reviewGatesByUrl.set(urlOf(8), secondGate.promise);
+		setup.claude.reviewOutcomes.push(
+			draftedFor('head-1', 'comment'),
+			draftedFor('head-1', 'comment'),
+		);
+		await setup.bot.tick();
+		await setup.claude.waitForReviewCall(2);
+		firstGate.open();
+		await waitUntil(() => setup.statusOf(7)?.status === 'waiting_on_author');
+		await letPendingJobsRun();
+
+		expect(setup.statusOf(7)?.progress).toBeNull();
+		expect(setup.statusOf(8)?.progress).toMatchObject({ message: 'Starting the review' });
+
+		secondGate.open();
+		await setup.settle();
+	});
+});
+
 describe('bot replies', () => {
 	it('answers a question in its own thread once, and skips "thanks"', async () => {
 		const setup = setUp({ reviewMode: 'auto' });
@@ -314,6 +496,33 @@ describe('bot replies', () => {
 		expect(setup.claude.replyPrompts).toHaveLength(2);
 	});
 
+	it('reply in flight + another tick → one reply job, one reply posted', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+		const entry = setup.github.addPullRequest(7);
+		const gate = createGate();
+
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.tickAndSettle();
+		entry.threads = [
+			makeThread([
+				makeComment({ databaseId: 1, authorLogin: VIEWER_LOGIN, body: createBotMarker('head-1') }),
+				makeComment({ databaseId: 2, authorLogin: 'ana', body: 'Why?' }),
+			]),
+		];
+		setup.claude.replyGate = gate.promise;
+		setup.claude.replyOutcomes.push({ kind: 'result', result: { reply: 'Because.' } });
+		await setup.bot.tick();
+		await setup.claude.replyEntered;
+		await setup.bot.tick();
+
+		expect(setup.claude.replyPrompts).toHaveLength(1);
+
+		gate.open();
+		await setup.settle();
+
+		expect(setup.github.replies).toHaveLength(1);
+	});
+
 	it('answerQuestions off → no reply runs', async () => {
 		const setup = setUp({ reviewMode: 'auto', answerQuestions: false });
 		const entry = setup.github.addPullRequest(7);
@@ -341,6 +550,18 @@ const createGate = () => {
 	return { promise, open: () => gate.open() };
 };
 
+const letPendingJobsRun = (): Promise<void> => Bun.sleep(10);
+
+const waitUntil = async (condition: () => boolean): Promise<void> => {
+	for (let attempt = 0; attempt < 200 && !condition(); attempt += 1) {
+		await Bun.sleep(1);
+	}
+};
+
+const urlOf = (number: number): string => `https://github.com/acme/api/pull/${number}`;
+
+const numberOf = (url: string): number => Number(url.split('/').at(-1));
+
 describe('changes while a review is running', () => {
 	const startGatedReview = async (settings = {}) => {
 		const setup = setUp({ reviewMode: 'auto', ...settings });
@@ -361,7 +582,7 @@ describe('changes while a review is running', () => {
 
 		expect(setup.bot.stop(setup.statusOf(7)?.id ?? 0)).toBe('ok');
 		setup.gate.open();
-		await setup.bot.waitForIdle();
+		await setup.settle();
 
 		expect(setup.github.submissions).toEqual([]);
 		expect(setup.statusOf(7)?.status).toBe('stopped');
@@ -381,7 +602,7 @@ describe('changes while a review is running', () => {
 		});
 		await setup.bot.tick();
 		setup.gate.open();
-		await setup.bot.waitForIdle();
+		await setup.settle();
 
 		expect(setup.github.submissions).toEqual([]);
 		expect(setup.statusOf(7)?.status).toBe('needs_you');
@@ -394,7 +615,7 @@ describe('changes while a review is running', () => {
 		setup.entry.live.isMerged = true;
 		await setup.bot.tick();
 		setup.gate.open();
-		await setup.bot.waitForIdle();
+		await setup.settle();
 
 		expect(setup.github.submissions).toEqual([]);
 		expect(setup.statusOf(7)?.status).toBe('done');
@@ -405,10 +626,32 @@ describe('changes while a review is running', () => {
 
 		setup.bot.setPaused(true);
 		setup.gate.open();
-		await setup.bot.waitForIdle();
+		await setup.settle();
 
 		expect(setup.github.submissions).toEqual([]);
 		expect(setup.statusOf(7)?.status).toBe('queued');
+	});
+
+	it('Stop then Review again mid-run → no second run until the first ends, then exactly one review posted', async () => {
+		const setup = await startGatedReview();
+		const id = setup.statusOf(7)?.id ?? 0;
+
+		expect(setup.bot.stop(id)).toBe('ok');
+		expect(setup.bot.requestReview(id)).toBe('ok');
+		await setup.bot.tick();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.gate.open();
+		await setup.settle();
+
+		expect(setup.github.submissions).toEqual([]);
+
+		await setup.tickAndSettle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+		expect(setup.github.submissions).toHaveLength(1);
 	});
 
 	it('Review and Retry clicks while reviewing → busy', async () => {
@@ -418,7 +661,7 @@ describe('changes while a review is running', () => {
 		expect(setup.bot.requestReview(id)).toBe('busy');
 		expect(setup.bot.retry(id)).toBe('busy');
 		setup.gate.open();
-		await setup.bot.waitForIdle();
+		await setup.settle();
 	});
 });
 
@@ -547,7 +790,7 @@ describe('failure paths', () => {
 		const { store } = setup.dependencies;
 
 		await setup.bot.tick();
-		await setup.bot.waitForIdle();
+		await setup.settle();
 		store.updatePullRequest(setup.statusOf(7)?.id ?? 0, { status: 'reviewing' });
 		entry.reviews.push({
 			id: 1,
@@ -702,7 +945,7 @@ describe('changes while a reply is running', () => {
 
 	const finish = async (setup: Awaited<ReturnType<typeof startGatedReply>>) => {
 		setup.gate.open();
-		await setup.bot.waitForIdle();
+		await setup.settle();
 
 		expect(setup.github.replies).toEqual([]);
 		expect(setup.dependencies.store.isCommentHandled(2)).toBe(false);
@@ -733,6 +976,28 @@ describe('changes while a reply is running', () => {
 		expect(setup.statusOf(7)?.status).toBe('needs_you');
 	});
 
+	it('review starts on the same PR → no reply, comment not handled, review progress kept', async () => {
+		const setup = await startGatedReply();
+		const reviewGate = createGate();
+
+		setup.claude.reviewGate = reviewGate.promise;
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+
+		expect(setup.bot.requestReview(setup.statusOf(7)?.id ?? 0)).toBe('ok');
+
+		await setup.bot.tick();
+		await setup.claude.waitForReviewCall(2);
+		setup.gate.open();
+		await letPendingJobsRun();
+
+		expect(setup.github.replies).toEqual([]);
+		expect(setup.dependencies.store.isCommentHandled(2)).toBe(false);
+		expect(setup.statusOf(7)?.progress).toMatchObject({ message: 'Starting the review' });
+
+		reviewGate.open();
+		await setup.settle();
+	});
+
 	it('Pause → no reply', async () => {
 		const setup = await startGatedReply();
 
@@ -759,7 +1024,7 @@ describe('failure before the review starts', () => {
 		const failure = { remaining: 1, syncCalls: 0 };
 
 		await setup.bot.tick();
-		await setup.bot.waitForIdle();
+		await setup.settle();
 		setup.dependencies.store.updatePullRequest(setup.statusOf(7)?.id ?? 0, { status: 'queued' });
 
 		setup.github.getPullRequest = async (reference) => {
@@ -837,7 +1102,7 @@ describe('live progress in /state', () => {
 		});
 
 		gate.open();
-		await setup.bot.waitForIdle();
+		await setup.settle();
 
 		expect(setup.statusOf(7)?.progress).toBeNull();
 	});
@@ -867,7 +1132,73 @@ describe('progress lifecycle across jobs', () => {
 		});
 
 		gate.open();
-		await setup.bot.waitForIdle();
+		await setup.settle();
+
+		expect(setup.statusOf(7)?.progress).toBeNull();
+	});
+
+	it('reply finishes while a review on another PR runs → that review keeps its progress', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+		const entry = setup.github.addPullRequest(7);
+		const replyGate = createGate();
+		const reviewGate = createGate();
+
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.tickAndSettle();
+		entry.threads = [
+			makeThread([
+				makeComment({ databaseId: 1, authorLogin: VIEWER_LOGIN, body: createBotMarker('head-1') }),
+				makeComment({ databaseId: 2, authorLogin: 'ana', body: 'Why?' }),
+			]),
+		];
+		setup.github.addPullRequest(8);
+		setup.claude.replyGate = replyGate.promise;
+		setup.claude.reviewGate = reviewGate.promise;
+		setup.claude.replyOutcomes.push({ kind: 'result', result: { reply: 'Because.' } });
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.bot.tick();
+		await setup.claude.replyEntered;
+		await setup.claude.waitForReviewCall(2);
+		replyGate.open();
+		await waitUntil(() => setup.github.replies.length === 1);
+		await letPendingJobsRun();
+
+		expect(setup.statusOf(7)?.progress).toBeNull();
+		expect(setup.statusOf(8)?.progress).toMatchObject({ message: 'Starting the review' });
+
+		reviewGate.open();
+		await setup.settle();
+	});
+
+	it('review on a PR ends before the reply on it → the reply progress shows until the reply ends', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+		const entry = setup.github.addPullRequest(7);
+		const replyGate = createGate();
+
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.tickAndSettle();
+		entry.threads = [
+			makeThread([
+				makeComment({ databaseId: 1, authorLogin: VIEWER_LOGIN, body: createBotMarker('head-1') }),
+				makeComment({ databaseId: 2, authorLogin: 'ana', body: 'Why?' }),
+			]),
+		];
+		setup.claude.replyGate = replyGate.promise;
+		await setup.bot.tick();
+		await setup.claude.replyEntered;
+		setup.bot.requestReview(setup.statusOf(7)?.id ?? 0);
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.bot.tick();
+		await waitUntil(() => !['queued', 'reviewing'].includes(setup.statusOf(7)?.status ?? ''));
+		await letPendingJobsRun();
+
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+		expect(setup.statusOf(7)?.progress).toMatchObject({
+			message: 'Answering @ana on src/retry.ts',
+		});
+
+		replyGate.open();
+		await setup.settle();
 
 		expect(setup.statusOf(7)?.progress).toBeNull();
 	});
@@ -883,7 +1214,7 @@ describe('progress lifecycle across jobs', () => {
 		await setup.claude.waitForReviewCall(1);
 		setup.bot.stop(setup.statusOf(7)?.id ?? 0);
 		gate.open();
-		await setup.bot.waitForIdle();
+		await setup.settle();
 
 		expect(setup.statusOf(7)?.progress).toBeNull();
 	});
@@ -892,7 +1223,6 @@ describe('progress lifecycle across jobs', () => {
 		const setup = setUp({ reviewMode: 'auto' });
 
 		setup.github.addPullRequest(7);
-		setup.github.addPullRequest(8);
 		setup.claude.reviewProgressLines = [
 			JSON.stringify({
 				type: 'system',
@@ -904,6 +1234,7 @@ describe('progress lifecycle across jobs', () => {
 		];
 		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
 		await setup.tickAndSettle();
+		setup.github.addPullRequest(8);
 
 		const gate = createGate();
 
@@ -921,7 +1252,7 @@ describe('progress lifecycle across jobs', () => {
 		expect(reviewing?.progress).toMatchObject({ message: 'Starting the review', subagents: [] });
 
 		gate.open();
-		await setup.bot.waitForIdle();
+		await setup.settle();
 	});
 });
 
@@ -1193,7 +1524,7 @@ describe('manual-mode draft edge cases', () => {
 			reviewMode: 'manual',
 		});
 		gate.open();
-		await setup.bot.waitForIdle();
+		await setup.settle();
 
 		expect(setup.statusOf(7)?.status).toBe('draft_ready');
 		expect(setup.github.submissions).toEqual([]);
@@ -1283,5 +1614,210 @@ describe('request changes from a draft', () => {
 		expect(result.result).toBe('ok');
 		expect(setup.github.submissions).toEqual([]);
 		expect(setup.statusOf(7)?.status).toBe('waiting_on_author');
+	});
+});
+
+describe('worktree release', () => {
+	const reviewOnce = async (setup: ReturnType<typeof setUp>): Promise<void> => {
+		setup.github.addPullRequest(7);
+		await setup.tickAndSettle();
+	};
+
+	const expectReleasedOnce = (setup: ReturnType<typeof setUp>): void => {
+		expect(setup.clones.prepared).toHaveLength(1);
+		expect(setup.clones.released).toEqual(setup.clones.prepared);
+	};
+
+	it('review posted → its worktree released once', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await reviewOnce(setup);
+
+		expectReleasedOnce(setup);
+		expect(setup.github.submissions).toHaveLength(1);
+	});
+
+	it('review failed → released once, failure recorded', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+
+		setup.claude.reviewOutcomes.push({ kind: 'failed', summary: 'Claude run timed out' });
+		await reviewOnce(setup);
+
+		expectReleasedOnce(setup);
+		expect(setup.statusOf(7)?.reason).toBe('Claude run timed out');
+	});
+
+	it('usage limited → released once, PR queued again', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+
+		setup.claude.reviewOutcomes.push({ kind: 'usage_limited', resumeAt: setup.clock.now + 60_000 });
+		await reviewOnce(setup);
+
+		expectReleasedOnce(setup);
+		expect(setup.statusOf(7)?.status).toBe('queued');
+	});
+
+	it('setup broken → released once, PR queued again', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+
+		setup.claude.reviewOutcomes.push({ kind: 'setup_broken', message: 'Not logged in' });
+		await reviewOnce(setup);
+
+		expectReleasedOnce(setup);
+		expect(setup.statusOf(7)?.status).toBe('queued');
+	});
+
+	it('runReview rejects → released once, failure recorded', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+
+		setup.claude.reviewError = new Error('spawn failed');
+		await reviewOnce(setup);
+
+		expectReleasedOnce(setup);
+		expect(setup.statusOf(7)?.reason).toContain('spawn failed');
+	});
+
+	it('runReview throws synchronously → released once, failure recorded', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+
+		setup.claude.reviewSyncError = new Error('bad arguments');
+		await reviewOnce(setup);
+
+		expectReleasedOnce(setup);
+		expect(setup.statusOf(7)?.reason).toContain('bad arguments');
+	});
+
+	it('posting the result throws → released once, failure recorded', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+
+		setup.github.failSubmissionsWith.push(500);
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await reviewOnce(setup);
+
+		expectReleasedOnce(setup);
+		expect(setup.github.submissions).toEqual([]);
+		expect(setup.statusOf(7)?.reason).not.toBeNull();
+	});
+
+	it('Stop mid-review, then the run ends → released once, nothing posted', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+		const gate = createGate();
+
+		setup.github.addPullRequest(7);
+		setup.claude.reviewGate = gate.promise;
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.bot.tick();
+		await setup.claude.waitForReviewCall(1);
+		setup.bot.stop(setup.statusOf(7)?.id ?? 0);
+
+		expect(setup.clones.released).toEqual([]);
+
+		gate.open();
+		await setup.settle();
+
+		expectReleasedOnce(setup);
+		expect(setup.github.submissions).toEqual([]);
+	});
+
+	it('three parallel reviews → three distinct worktrees, each released once', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+
+		for (const number of [7, 8, 9]) {
+			setup.github.addPullRequest(number);
+		}
+
+		setup.claude.reviewOutcomes.push(...[1, 2, 3].map(() => draftedFor('head-1', 'comment')));
+		await setup.tickAndSettle();
+
+		expect(new Set(setup.clones.prepared).size).toBe(3);
+		expect(setup.clones.released.toSorted()).toEqual(setup.clones.prepared.toSorted());
+	});
+
+	it('preparing the clone fails → nothing to release, failure recorded, no Claude run', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+
+		setup.clones.prepareError = new Error('clone failed');
+		await reviewOnce(setup);
+
+		expect(setup.clones.released).toEqual([]);
+		expect(setup.claude.reviewCalls).toEqual([]);
+		expect(setup.statusOf(7)?.reason).toContain('clone failed');
+	});
+
+	describe('replies', () => {
+		const setUpReply = async () => {
+			const setup = setUp({ reviewMode: 'auto' });
+			const entry = setup.github.addPullRequest(7);
+
+			setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+			await setup.tickAndSettle();
+			entry.threads = [
+				makeThread([
+					makeComment({
+						databaseId: 1,
+						authorLogin: VIEWER_LOGIN,
+						body: `Finding\n${createBotMarker('head-1')}`,
+					}),
+					makeComment({ databaseId: 2, authorLogin: 'ana', body: 'Why is this wrong?' }),
+				]),
+			];
+
+			return setup;
+		};
+
+		const expectReplyReleased = (setup: ReturnType<typeof setUp>): void => {
+			expect(setup.clones.prepared).toHaveLength(2);
+			expect(setup.clones.released.toSorted()).toEqual(setup.clones.prepared.toSorted());
+		};
+
+		it('reply posted → released once', async () => {
+			const setup = await setUpReply();
+
+			setup.claude.replyOutcomes.push({ kind: 'result', result: { reply: 'Because X.' } });
+			await setup.tickAndSettle();
+
+			expectReplyReleased(setup);
+			expect(setup.github.replies).toHaveLength(1);
+		});
+
+		it('reply throws → released once, comment marked handled', async () => {
+			const setup = await setUpReply();
+
+			setup.claude.replyError = new Error('reply crashed');
+			await setup.tickAndSettle();
+
+			expectReplyReleased(setup);
+			expect(setup.dependencies.store.isCommentHandled(2)).toBe(true);
+		});
+
+		it('reply usage limited → released once, comment left for later', async () => {
+			const setup = await setUpReply();
+
+			setup.claude.replyOutcomes.push({
+				kind: 'usage_limited',
+				resumeAt: setup.clock.now + 60_000,
+			});
+			await setup.tickAndSettle();
+
+			expectReplyReleased(setup);
+			expect(setup.dependencies.store.isCommentHandled(2)).toBe(false);
+		});
+
+		it('paused mid-reply → released once, nothing posted', async () => {
+			const setup = await setUpReply();
+			const gate = createGate();
+
+			setup.claude.replyGate = gate.promise;
+			setup.claude.replyOutcomes.push({ kind: 'result', result: { reply: 'Because X.' } });
+			await setup.bot.tick();
+			await setup.claude.replyEntered;
+			setup.bot.setPaused(true);
+			gate.open();
+			await setup.settle();
+
+			expectReplyReleased(setup);
+			expect(setup.github.replies).toEqual([]);
+		});
 	});
 });

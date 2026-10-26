@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { createBot } from '../bot/bot.js';
+import { createSilentLogger } from '../logging/logger.js';
 import type { BotState } from '../bot/state-view.js';
 import { DEFAULT_SETTINGS } from '../settings/settings.js';
 import { makeDraft } from '../test-support/factories.js';
@@ -178,5 +179,37 @@ describe('draft routes with a held draft', () => {
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({ ok: true });
 		expect(github.submissions).toHaveLength(1);
+	});
+});
+
+describe('api request logging', () => {
+	it('routine GET /state polls are not logged; other requests are', async () => {
+		const harness = createTestHarness();
+		const events: string[] = [];
+		const handle = createApiHandler({
+			bot: createBot(harness.dependencies),
+			settingsStore: harness.dependencies.settingsStore,
+			token: TOKEN,
+			logger: {
+				...createSilentLogger(),
+				info: (event, fields) => {
+					events.push(`${event} ${fields?.method} ${fields?.path}`);
+				},
+			},
+		});
+
+		const call = (method: string, path: string) => {
+			return handle(
+				new Request(`http://127.0.0.1${path}`, {
+					method,
+					headers: { authorization: `Bearer ${TOKEN}` },
+				}),
+			);
+		};
+
+		await call('GET', '/state');
+		await call('POST', '/pause');
+
+		expect(events).toEqual(['api_request POST /pause']);
 	});
 });

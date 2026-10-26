@@ -58,7 +58,56 @@ describe('parseClaudeOutput', () => {
 	it('drafted without filing → failed (schema mismatch)', () => {
 		const { filing: _omitted, ...withoutFiling } = makeDraft();
 
-		expect(parseReview(envelopeWith(withoutFiling)).kind).toBe('failed');
+		const outcome = parseReview(envelopeWith(withoutFiling));
+
+		expect(outcome).toMatchObject({
+			kind: 'failed',
+			schemaIssues: [expect.stringMatching(/^filing: /)],
+		});
+		expect(outcome.kind === 'failed' && outcome.summary).toStartWith(
+			"Claude's result had the wrong shape (filing: ",
+		);
+	});
+
+	it('an inline line that is not a whole number → failed, not coerced', () => {
+		const draftWithLine = (line: unknown) => {
+			return envelopeWith({
+				...makeDraft(),
+				comments: [{ path: 'a.ts', line, side: 'RIGHT', body: 'x' }],
+			});
+		};
+
+		expect(parseReview(draftWithLine(true)).kind).toBe('failed');
+		expect(parseReview(draftWithLine('12a')).kind).toBe('failed');
+		expect(parseReview(draftWithLine([12])).kind).toBe('failed');
+	});
+
+	it('drafted with only the essential fields → defaults for the rest, line numbers coerced', () => {
+		const outcome = parseReview(
+			envelopeWith({
+				outcome: 'drafted',
+				filing: 'comment',
+				headRefOid: 'head-1',
+				summary: 'Backoff missing',
+				comments: [{ path: 'a.ts', line: '12', body: 'Add a backoff' }],
+			}),
+		);
+
+		expect(outcome).toEqual({
+			kind: 'result',
+			result: {
+				outcome: 'drafted',
+				filing: 'comment',
+				headRefOid: 'head-1',
+				baseRefName: '',
+				targetTipOid: '',
+				summary: 'Backoff missing',
+				mainReview: '',
+				comments: [{ path: 'a.ts', line: 12, side: 'RIGHT', body: 'Add a backoff' }],
+				fileComments: [],
+				coverage: '',
+			},
+		});
 	});
 
 	it('timeout → failed', () => {

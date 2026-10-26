@@ -26,6 +26,6 @@ export interface BotRuntime {
 	readiness: Readiness;
 	viewerLogin: string | null;
 	readinessCheckedAt: number | null;
-	isJobRunning: boolean;
+	isReplyJobRunning: boolean;
 	isSyncing: boolean;
 }

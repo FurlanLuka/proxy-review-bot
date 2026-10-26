@@ -16,6 +16,7 @@ public struct PullRequest: Codable, Equatable, Identifiable, Sendable {
     public var headSha: String
     public var summary: String?
     public var reason: String?
+    public var retryAt: Double?
     public var reviewStartedAt: Double?
     public var updatedAt: Double
     public var progress: ReviewProgress?
@@ -23,6 +24,30 @@ public struct PullRequest: Codable, Equatable, Identifiable, Sendable {
 
     public var shortName: String {
         "\(repo) #\(number)"
+    }
+
+    public var hasFailedReview: Bool {
+        status == .waitingOnAuthor && reason != nil
+    }
+
+    public var reviewAgainAction: ServiceAction? {
+        if status == .needsYou {
+            return .retry(pullRequestID: id)
+        }
+
+        return hasFailedReview ? .review(pullRequestID: id) : nil
+    }
+
+    public var isWaitingOnYou: Bool {
+        status.isWaitingOnYou || hasFailedReview
+    }
+
+    public var isInReview: Bool {
+        status.isInReview && !hasFailedReview
+    }
+
+    public var retryAtDate: Date? {
+        retryAt.map { Date(timeIntervalSince1970: $0 / 1000) }
     }
 
     public var reviewStartedAtDate: Date? {

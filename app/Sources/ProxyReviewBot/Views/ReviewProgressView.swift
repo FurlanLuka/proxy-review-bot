@@ -34,11 +34,13 @@ private struct SubagentRowView: View {
                 Text(subagent.label)
                     .font(MenuStyle.labelFont)
 
-                Text(subagent.status == .running ? subagent.currentStep ?? subagent.description : subagent.description)
-                    .font(MenuStyle.metaFont)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                if let detail = subagent.detailText {
+                    Text(detail)
+                        .font(MenuStyle.metaFont)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             }
 
             Spacer(minLength: 4)

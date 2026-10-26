@@ -111,7 +111,11 @@ export const createApiHandler = ({ bot, settingsStore, token, logger }: CreateAp
 		try {
 			const response = await route(request, path);
 
-			logger.info('api_request', { method: request.method, path, status: response.status });
+			const isRoutinePoll = request.method === 'GET' && path === '/state' && response.ok;
+
+			if (!isRoutinePoll) {
+				logger.info('api_request', { method: request.method, path, status: response.status });
+			}
 
 			return response;
 		} catch (error) {

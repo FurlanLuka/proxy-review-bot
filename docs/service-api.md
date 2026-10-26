@@ -54,6 +54,7 @@ Every request carries `Authorization: Bearer <PRB_TOKEN>`. A request without it 
 			"headSha": "abc123",
 			"summary": "Retry logic sound, tests cover backoff",
 			"reason": null,
+			"retryAt": null,
 			"reviewStartedAt": null,
 			"updatedAt": 1793015179000,
 			"progress": null
@@ -70,6 +71,7 @@ Every request carries `Authorization: Bearer <PRB_TOKEN>`. A request without it 
 - `draft`: on `draft_ready` and `awaiting_approval` rows, `{ "filing": "comment" | "approve", "summary": "…", "commentCount": 3 }`; otherwise null.
 - `summary`: the last one-line review summary.
 - `reason`: why the PR is `needs_you`, `blocked` or failed.
+- `retryAt`: in auto mode, epoch ms when a failed review is tried again, on a `waiting_on_author` row with a `reason`; otherwise null. In manual mode a failed review waits for you.
 - `reviewStartedAt`: epoch ms while the status is `reviewing`.
 - `progress`: live progress while a review or reply is running, otherwise null. It's kept in memory only:
 

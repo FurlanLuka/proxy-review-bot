@@ -1,4 +1,5 @@
 import { buildReplyPrompt } from '../claude/prompts.js';
+import { runInClone } from '../clones/clones.js';
 import type { ReviewThread, ReviewThreadComment } from '../github/github-types.js';
 import { findUnansweredComment } from '../replies/reply-decisions.js';
 import { appendBotFooter } from '../review/bot-marker.js';
@@ -90,18 +91,20 @@ export const runNextReplyJob = async (params: ReplyJobParams): Promise<JobOutcom
 	);
 
 	try {
-		const clonePath = await clones.prepareClone(tracked);
-		const outcome = await claude.runReply({
-			clonePath,
-			prompt: buildReplyPrompt({
-				reference: tracked,
+		const clone = await clones.prepareClone(tracked);
+		const outcome = await runInClone(clone, (clonePath) =>
+			claude.runReply({
 				clonePath,
-				headSha,
-				path: thread.path,
-				line: thread.line,
-				comments: thread.comments,
+				prompt: buildReplyPrompt({
+					reference: tracked,
+					clonePath,
+					headSha,
+					path: thread.path,
+					line: thread.line,
+					comments: thread.comments,
+				}),
 			}),
-		});
+		);
 
 		if (outcome.kind === 'usage_limited' || outcome.kind === 'setup_broken') {
 			return outcome;

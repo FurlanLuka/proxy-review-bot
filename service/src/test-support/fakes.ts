@@ -1,9 +1,11 @@
 import { Database } from 'bun:sqlite';
+import { expect } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BotDependencies } from '../bot/bot-context.js';
 import type { ClaudeClient } from '../claude/claude-client.js';
+import type { CloneManager } from '../clones/clones.js';
 import type {
 	DiscoveredPullRequest,
 	FileCommentSubmission,
@@ -142,6 +144,9 @@ export interface FakeClaude extends ClaudeClient {
 	reviewCalls: string[];
 	replyPrompts: string[];
 	reviewGate: Promise<void> | null;
+	reviewError: Error | null;
+	reviewSyncError: Error | null;
+	reviewGatesByUrl: Map<string, Promise<void>>;
 	reviewProgressLines: string[];
 	replyEntered: Promise<void>;
 	waitForReviewCall: (count: number) => Promise<void>;
@@ -159,6 +164,33 @@ export const createFakeClaude = (): FakeClaude => {
 		}
 	};
 
+	const runFakeReview: ClaudeClient['runReview'] = async ({ pullRequestUrl, onProgress }) => {
+		fake.reviewCalls.push(pullRequestUrl);
+
+		if (fake.reviewError !== null) {
+			throw fake.reviewError;
+		}
+
+		const progress = { current: createReviewProgress(0, 'Starting the review') };
+
+		onProgress?.(progress.current);
+
+		for (const line of fake.reviewProgressLines) {
+			progress.current = applyStreamLine(progress.current, line, 0);
+			onProgress?.(progress.current);
+		}
+
+		notifyReviewWaiters();
+
+		await fake.reviewGatesByUrl.get(pullRequestUrl);
+
+		if (fake.reviewGate !== null) {
+			await fake.reviewGate;
+		}
+
+		return fake.reviewOutcomes.shift() ?? { kind: 'failed', summary: 'no fake outcome queued' };
+	};
+
 	const fake: FakeClaude = {
 		replyEntered: replyEntered.promise,
 		waitForReviewCall: (count) => {
@@ -174,28 +206,18 @@ export const createFakeClaude = (): FakeClaude => {
 		reviewCalls: [],
 		replyPrompts: [],
 		reviewGate: null,
+		reviewError: null,
+		reviewSyncError: null,
+		reviewGatesByUrl: new Map(),
 		reviewProgressLines: [],
 		replyGate: null,
 		replyError: null,
-		runReview: async ({ pullRequestUrl, onProgress }) => {
-			fake.reviewCalls.push(pullRequestUrl);
-
-			const progress = { current: createReviewProgress(0, 'Starting the review') };
-
-			onProgress?.(progress.current);
-
-			for (const line of fake.reviewProgressLines) {
-				progress.current = applyStreamLine(progress.current, line, 0);
-				onProgress?.(progress.current);
+		runReview: (params) => {
+			if (fake.reviewSyncError !== null) {
+				throw fake.reviewSyncError;
 			}
 
-			notifyReviewWaiters();
-
-			if (fake.reviewGate !== null) {
-				await fake.reviewGate;
-			}
-
-			return fake.reviewOutcomes.shift() ?? { kind: 'failed', summary: 'no fake outcome queued' };
+			return runFakeReview(params);
 		},
 		runReply: async ({ prompt }) => {
 			fake.replyPrompts.push(prompt);
@@ -216,26 +238,64 @@ export const createFakeClaude = (): FakeClaude => {
 	return fake;
 };
 
+export interface FakeClones extends CloneManager {
+	prepared: string[];
+	released: string[];
+	prepareError: Error | null;
+}
+
+export const createFakeClones = (): FakeClones => {
+	const fake: FakeClones = {
+		prepared: [],
+		released: [],
+		prepareError: null,
+		prepareClone: async () => {
+			if (fake.prepareError !== null) {
+				throw fake.prepareError;
+			}
+
+			const path = `/tmp/fake-clone-${fake.prepared.length + 1}`;
+
+			fake.prepared.push(path);
+
+			return {
+				path,
+				release: async () => {
+					fake.released.push(path);
+				},
+			};
+		},
+	};
+
+	return fake;
+};
+
 export interface TestHarness {
 	clock: { now: number };
 	readiness: { status: 'ready' | 'setup_needed' };
 	github: FakeGitHub;
 	claude: FakeClaude;
+	clones: FakeClones;
 	dependencies: BotDependencies;
 }
+
+export const expectNoLeakedWorktrees = ({ clones }: Pick<TestHarness, 'clones'>): void => {
+	expect(clones.released.toSorted()).toEqual(clones.prepared.toSorted());
+};
 
 export const createTestHarness = (): TestHarness => {
 	const clock = { now: ANCHOR_TIME };
 	const readiness: TestHarness['readiness'] = { status: 'ready' };
 	const github = createFakeGitHub(clock);
 	const claude = createFakeClaude();
+	const clones = createFakeClones();
 	const directory = mkdtempSync(join(tmpdir(), 'proxy-review-bot-test-'));
 	const dependencies: BotDependencies = {
 		store: createStore(new Database(':memory:')),
 		settingsStore: createSettingsStore(join(directory, 'settings.json')),
 		github,
 		claude,
-		clones: { prepareClone: async () => '/tmp/fake-clone' },
+		clones,
 		runReadinessChecks: async () => ({
 			readiness: { status: readiness.status, checks: [] },
 			viewerLogin: VIEWER_LOGIN,
@@ -244,5 +304,5 @@ export const createTestHarness = (): TestHarness => {
 		now: () => clock.now,
 	};
 
-	return { clock, readiness, github, claude, dependencies };
+	return { clock, readiness, github, claude, clones, dependencies };
 };

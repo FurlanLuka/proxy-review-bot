@@ -4,6 +4,7 @@ import SwiftUI
 struct PullRequestActionsView: View {
     @ObservedObject var model: BotModel
     let pullRequest: PullRequest
+    var isCompact = false
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -32,18 +33,24 @@ struct PullRequestActionsView: View {
             reviewDraftButton(isProminent: true)
 
             openButton
-        case .needsYou:
-            Button {
-                model.retry(pullRequest)
-            } label: {
-                Label("Review Again", systemImage: "arrow.clockwise")
+        case .needsYou, .waitingOnAuthor:
+            if let action = pullRequest.reviewAgainAction {
+                reviewAgainButton(action: action)
             }
-            .buttonStyle(PillButtonStyle(isProminent: true, tint: Palette.peach))
 
             openButton
         default:
-            EmptyView()
+            openButton
         }
+    }
+
+    private func reviewAgainButton(action: ServiceAction) -> some View {
+        Button {
+            model.perform(action, on: pullRequest)
+        } label: {
+            Label("Review Again", systemImage: "arrow.clockwise")
+        }
+        .buttonStyle(PillButtonStyle(isProminent: true, tint: Palette.peach))
     }
 
     private func reviewDraftButton(isProminent: Bool) -> some View {
@@ -61,7 +68,9 @@ struct PullRequestActionsView: View {
             NSWorkspace.shared.open(pullRequest.url)
         } label: {
             Label("Open PR", systemImage: "arrow.up.right")
+                .labelStyle(isCompact ? AnyLabelStyle(.iconOnly) : AnyLabelStyle(.titleAndIcon))
         }
         .buttonStyle(PillButtonStyle())
+        .help("Open PR")
     }
 }

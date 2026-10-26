@@ -20,6 +20,18 @@ final class PullRequestPresentationTests: XCTestCase {
         XCTAssertEqual(PullRequestSections.attentionCount(of: pullRequests), 3)
     }
 
+    func testFailedReviewIsGroupedUnderNeedsYou() {
+        var failed = Fixtures.pullRequest(id: 7, status: .waitingOnAuthor)
+        failed.reason = "Claude run timed out"
+        let pullRequests = [failed, Fixtures.pullRequest(id: 8, status: .waitingOnAuthor)]
+
+        let sections = PullRequestSections(pullRequests: pullRequests)
+
+        XCTAssertEqual(sections.needsYou.map(\.id), [7])
+        XCTAssertEqual(sections.inReview.map(\.id), [8])
+        XCTAssertEqual(PullRequestSections.attentionCount(of: pullRequests), 1)
+    }
+
     func testReviewingDetailShowsElapsedMinutes() {
         let startedAt = Date(timeIntervalSince1970: 1_000)
         let pullRequest = Fixtures.pullRequest(id: 1, status: .reviewing, reviewStartedAt: 1_000_000)

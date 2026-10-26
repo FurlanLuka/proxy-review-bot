@@ -24,6 +24,17 @@ final class ReviewProgressTests: XCTestCase {
         XCTAssertEqual(progress.advisorsText, "2 of 3 advisors done")
     }
 
+    func testDetailShowsTheCurrentStepWhileRunningAndHidesWhenEmpty() throws {
+        var subagents = try JSONDecoder().decode(ReviewProgress.self, from: Data(progressJSON.utf8)).subagents
+
+        XCTAssertEqual(subagents[0].detailText, "Design")
+        XCTAssertEqual(subagents[1].detailText, "Running git show")
+
+        subagents[0].description = ""
+
+        XCTAssertNil(subagents[0].detailText)
+    }
+
     func testDurationUsesFinishTimeOrNow() throws {
         let progress = try JSONDecoder().decode(ReviewProgress.self, from: Data(progressJSON.utf8))
         let now = Date(timeIntervalSince1970: 1_793_015_290)

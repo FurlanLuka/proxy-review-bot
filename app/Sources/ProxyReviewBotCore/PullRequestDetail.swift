@@ -21,7 +21,7 @@ public enum PullRequestDetail {
             .compactMap { $0 }
             .joined(separator: " · ")
         case .waitingOnAuthor:
-            return pullRequest.summary.map { "Waiting on author · \($0)" } ?? "Waiting on author"
+            return waitingOnAuthorText(for: pullRequest, now: now)
         case .blocked:
             return pullRequest.reason.map { "Blocked: \($0)" } ?? "Blocked"
         case .done:
@@ -59,6 +59,24 @@ public enum PullRequestDetail {
         return ["Draft ready", commentText, filingText]
             .compactMap { $0 }
             .joined(separator: " · ")
+    }
+
+    private static func waitingOnAuthorText(for pullRequest: PullRequest, now: Date) -> String {
+        if let reason = pullRequest.reason, pullRequest.hasFailedReview {
+            let retryText = pullRequest.retryAtDate.map { retryAt in
+                let minutes = max(1, Int(ceil(retryAt.timeIntervalSince(now) / 60)))
+
+                return retryAt > now ? "tries again in \(minutes) min" : "tries again soon"
+            }
+
+            return ["Review failed: \(reason)", retryText].compactMap { $0 }.joined(separator: " · ")
+        }
+
+        if pullRequest.rounds == 0 {
+            return "Nothing posted · reviews again when the author pushes"
+        }
+
+        return pullRequest.summary.map { "Waiting on author · \($0)" } ?? "Waiting on author"
     }
 
     private static func reviewingText(startedAt: Date?, now: Date) -> String {

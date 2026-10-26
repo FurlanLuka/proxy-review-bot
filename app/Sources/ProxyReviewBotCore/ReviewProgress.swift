@@ -23,6 +23,12 @@ public struct SubagentProgress: Codable, Equatable, Identifiable, Sendable {
     public var startedAt: Double
     public var finishedAt: Double?
 
+    public var detailText: String? {
+        let detail = status == .running ? currentStep ?? description : description
+
+        return detail.isEmpty ? nil : detail
+    }
+
     public func durationText(now: Date) -> String {
         let endMilliseconds = finishedAt ?? now.timeIntervalSince1970 * 1000
         let seconds = max(0, Int((endMilliseconds - startedAt) / 1000))

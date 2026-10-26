@@ -3,8 +3,29 @@ import SwiftUI
 struct MenuSectionHeader: View {
     let title: String
     var count: Int?
+    var isExpanded: Binding<Bool>?
+
+    @Environment(\.accessibilityReduceMotion) private var isReducingMotion
 
     var body: some View {
+        if let isExpanded {
+            Button {
+                withAnimation(isReducingMotion ? nil : .easeInOut(duration: 0.15)) {
+                    isExpanded.wrappedValue.toggle()
+                }
+            } label: {
+                header(chevronExpanded: isExpanded.wrappedValue)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(isExpanded.wrappedValue ? "Expanded" : "Collapsed")
+            .accessibilityHint(isExpanded.wrappedValue ? "Hides this section" : "Shows this section")
+        } else {
+            header(chevronExpanded: nil)
+        }
+    }
+
+    private func header(chevronExpanded: Bool?) -> some View {
         HStack(spacing: 6) {
             Text(title)
                 .font(MenuStyle.sectionFont)
@@ -20,6 +41,13 @@ struct MenuSectionHeader: View {
             }
 
             Spacer()
+
+            if let chevronExpanded {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(chevronExpanded ? 90 : 0))
+            }
         }
         .padding(.horizontal, 4)
         .padding(.top, 6)

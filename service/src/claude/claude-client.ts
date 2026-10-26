@@ -107,13 +107,23 @@ export const createClaudeClient = ({
 		});
 		const outcome = parse(output);
 
-		logger.info('claude_run_finished', {
+		const fields = {
 			kind,
 			exitCode: output.exitCode,
 			isTimedOut: output.isTimedOut,
 			durationMs: output.durationMs,
 			outcome: outcome.kind,
-		});
+		};
+
+		if (outcome.kind === 'failed') {
+			logger.warn('claude_run_finished', {
+				...fields,
+				summary: outcome.summary,
+				schemaIssues: outcome.schemaIssues,
+			});
+		} else {
+			logger.info('claude_run_finished', fields);
+		}
 
 		return outcome;
 	};
