@@ -1,4 +1,5 @@
 import AppKit
+import OSLog
 import SwiftUI
 
 struct MenuWindowTopAnchor: NSViewRepresentable {
@@ -9,7 +10,6 @@ struct MenuWindowTopAnchor: NSViewRepresentable {
     func updateNSView(_ nsView: AnchorView, context: Context) {}
 
     final class AnchorView: NSView {
-        private var anchoredTop: CGFloat?
         private var observers: [NSObjectProtocol] = []
 
         override func viewDidMoveToWindow() {
@@ -21,41 +21,33 @@ struct MenuWindowTopAnchor: NSViewRepresentable {
             }
 
             let center = NotificationCenter.default
-            anchoredTop = window.isKeyWindow ? window.frame.maxY : nil
-            observers = [
-                center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { [weak self, weak window] _ in
-                    MainActor.assumeIsolated {
-                        self?.anchoredTop = window?.frame.maxY
-                    }
-                },
-                center.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated {
-                        self?.anchoredTop = nil
-                    }
-                },
-                center.addObserver(forName: NSWindow.didChangeScreenNotification, object: window, queue: .main) { [weak self, weak window] _ in
-                    MainActor.assumeIsolated {
-                        if window?.isKeyWindow == true {
-                            self?.anchoredTop = window?.frame.maxY
-                        }
-                    }
-                },
-                center.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: .main) { [weak self, weak window] _ in
+            observers = [NSWindow.didResizeNotification, NSWindow.didMoveNotification].map { name in
+                center.addObserver(forName: name, object: window, queue: .main) { [weak window] _ in
                     MainActor.assumeIsolated {
                         if let window {
-                            self?.keepTop(of: window)
+                            Self.pinUnderMenuBar(window)
                         }
                     }
-                },
-            ]
+                }
+            }
         }
 
-        private func keepTop(of window: NSWindow) {
-            guard let anchoredTop, abs(window.frame.maxY - anchoredTop) > 0.5 else {
+        static func pinUnderMenuBar(_ window: NSWindow) {
+            guard window.isVisible, let screen = window.screen else {
                 return
             }
 
-            window.setFrameTopLeftPoint(NSPoint(x: window.frame.minX, y: anchoredTop))
+            let menuBarBottom = screen.visibleFrame.maxY
+            let frame = window.frame
+            let hasSlippedDown = frame.maxY < menuBarBottom - 6
+            let fitsBelowMenuBar = frame.height <= menuBarBottom - screen.frame.minY
+
+            guard hasSlippedDown, fitsBelowMenuBar else {
+                return
+            }
+
+            Logger.app.info("Menu slipped \(menuBarBottom - frame.maxY, privacy: .public)pt below the menu bar; moving it back")
+            window.setFrameTopLeftPoint(NSPoint(x: frame.minX, y: menuBarBottom - 2))
         }
 
         private func removeObservers() {
