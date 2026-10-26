@@ -148,6 +148,24 @@ const toColumnValue = (key: keyof PullRequestUpdate, value: unknown): unknown =>
 	return value;
 };
 
+export interface ActivityEntry {
+	kind: string;
+	detail: unknown;
+	emittedAt: number;
+}
+
+interface ActivityRow {
+	kind: string;
+	detail_json: string;
+	emitted_at_ms: number;
+}
+
+const toActivityEntry = (row: ActivityRow): ActivityEntry => ({
+	kind: row.kind,
+	detail: JSON.parse(row.detail_json),
+	emittedAt: row.emitted_at_ms,
+});
+
 interface InsertDiscoveredParams {
 	discovered: DiscoveredPullRequest;
 	status: PullRequestStatus;
@@ -164,6 +182,7 @@ export interface Store {
 	isCommentHandled(commentId: number): boolean;
 	markCommentHandled(commentId: number, pullRequestId: number, now: number): void;
 	recordActivity(pullRequestId: number | null, kind: string, detail: unknown): void;
+	listActivity(pullRequestId: number): ActivityEntry[];
 	getFlag(name: string): string | null;
 	setFlag(name: string, value: string | null): void;
 }
@@ -287,6 +306,15 @@ export const createStore = (database: Database): Store => {
 				'INSERT INTO activity (pull_request_id, kind, detail_json, emitted_at_ms) VALUES (?, ?, ?, ?)',
 				[pullRequestId, kind, JSON.stringify(detail), Date.now()],
 			);
+		},
+		listActivity: (pullRequestId) => {
+			const rows = database
+				.query(
+					'SELECT kind, detail_json, emitted_at_ms FROM activity WHERE pull_request_id = ? ORDER BY id',
+				)
+				.all(pullRequestId) as ActivityRow[];
+
+			return rows.map(toActivityEntry);
 		},
 		getFlag: (name) => {
 			const row = database.query('SELECT value FROM runtime_flags WHERE name = ?').get(name) as {

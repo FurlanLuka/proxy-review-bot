@@ -86,6 +86,10 @@ final class BotModel: ObservableObject {
         try await connectedClient().fetchDraft(pullRequestID: pullRequestID)
     }
 
+    func fetchHistory() async throws -> [HistoryEntry] {
+        try await connectedClient().fetchHistory()
+    }
+
     func postDraft(_ request: ReviewPostRequest, pullRequestID: Int) async throws {
         try await performAndRefresh(.postDraft(pullRequestID: pullRequestID, request: request))
     }

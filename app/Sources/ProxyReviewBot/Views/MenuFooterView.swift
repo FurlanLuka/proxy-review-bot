@@ -4,6 +4,7 @@ import SwiftUI
 struct MenuFooterView: View {
     @ObservedObject var model: BotModel
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         HStack(spacing: 2) {
@@ -22,6 +23,11 @@ struct MenuFooterView: View {
                 openSettings()
             }
             .keyboardShortcut(",")
+
+            IconButton(systemName: "clock.arrow.circlepath", label: "History", help: "History") {
+                NSApp.activate()
+                openWindow(id: HistoryWindow.id, value: HistoryWindow.value)
+            }
 
             IconButton(systemName: "doc.plaintext", label: "Open Logs", help: "Open Logs") {
                 model.openLogs()

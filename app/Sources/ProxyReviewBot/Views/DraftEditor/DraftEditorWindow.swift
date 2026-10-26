@@ -87,7 +87,7 @@ struct DraftEditorWindowView: View {
     }
 }
 
-struct DraftEditorPlaceholderView: View {
+struct WindowPlaceholderView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {

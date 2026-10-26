@@ -40,6 +40,10 @@ export const createApiHandler = ({ bot, settingsStore, token, logger }: CreateAp
 			return json(bot.getState());
 		}
 
+		if (method === 'GET' && path === '/history') {
+			return json({ entries: bot.getHistory() });
+		}
+
 		const draftMatch = DRAFT_PATTERN.exec(path);
 
 		if (method === 'GET' && draftMatch !== null) {

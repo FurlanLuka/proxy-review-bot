@@ -23,6 +23,7 @@ interface RunReviewParams {
 	pullRequestUrl: string;
 	clonePath: string;
 	onProgress?: (progress: ReviewProgress) => void;
+	signal?: AbortSignal;
 }
 
 interface RunReplyParams {
@@ -80,6 +81,7 @@ interface RunClaudeParams<Result> {
 	clonePath: string;
 	parse: (output: CommandResult) => ClaudeRunOutcome<Result>;
 	onStdoutLine?: (line: string) => void;
+	signal?: AbortSignal;
 }
 
 export const createClaudeClient = ({
@@ -95,6 +97,7 @@ export const createClaudeClient = ({
 		clonePath,
 		parse,
 		onStdoutLine,
+		signal,
 	}: RunClaudeParams<Result>): Promise<ClaudeRunOutcome<Result>> => {
 		logger.info('claude_run_started', { kind, clonePath });
 		const output = await runCommand({
@@ -104,6 +107,7 @@ export const createClaudeClient = ({
 			env: buildClaudeEnv({ baseEnv, shimDirectory }),
 			timeoutMs: kind === 'review' ? REVIEW_TIMEOUT_MS : REPLY_TIMEOUT_MS,
 			onStdoutLine,
+			signal,
 		});
 		const outcome = parse(output);
 
@@ -111,6 +115,7 @@ export const createClaudeClient = ({
 			kind,
 			exitCode: output.exitCode,
 			isTimedOut: output.isTimedOut,
+			isAborted: signal?.aborted ?? false,
 			durationMs: output.durationMs,
 			outcome: outcome.kind,
 		};
@@ -129,7 +134,7 @@ export const createClaudeClient = ({
 	};
 
 	return {
-		runReview: ({ pullRequestUrl, clonePath, onProgress }) => {
+		runReview: ({ pullRequestUrl, clonePath, onProgress, signal }) => {
 			const args = buildClaudeArgs({
 				kind: 'review',
 				prompt: buildReviewPrompt(pullRequestUrl),
@@ -144,6 +149,7 @@ export const createClaudeClient = ({
 				kind: 'review',
 				args,
 				clonePath,
+				signal,
 				parse: (output) =>
 					parseClaudeOutput({ output, schema: REVIEW_RESULT_SCHEMA, now: Date.now() }),
 				onStdoutLine: (line) => {

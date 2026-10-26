@@ -90,7 +90,7 @@ struct PullRequestRowView: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 10) {
-            StatusGlyph(status: pullRequest.hasFailedReview ? .needsYou : pullRequest.status)
+            StatusGlyph(glyph: pullRequest.glyph)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(pullRequest.title)

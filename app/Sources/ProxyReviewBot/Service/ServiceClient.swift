@@ -32,6 +32,12 @@ struct ServiceClient: Sendable {
         return try JSONDecoder().decode(ReviewDraft.self, from: data)
     }
 
+    func fetchHistory() async throws -> [HistoryEntry] {
+        let action = ServiceAction.fetchHistory
+        let data = try await send(method: action.method, path: action.path)
+        return try JSONDecoder().decode(HistoryResponse.self, from: data).entries
+    }
+
     func saveSettings(_ settings: BotSettings) async throws -> BotSettings {
         let body = try JSONEncoder().encode(settings)
         let data = try await send(method: "PUT", path: "/settings", body: body)

@@ -18,6 +18,7 @@ interface RunReviewJobParams {
 	viewerLogin: string;
 	isPaused: () => boolean;
 	onProgress?: (progress: ReviewProgress) => void;
+	signal?: AbortSignal;
 }
 
 type JobRelease = 'discard' | 'requeue';
@@ -161,13 +162,24 @@ export const runReviewJob = async (params: RunReviewJobParams): Promise<JobOutco
 		jobLogger.info('review_job_started', { url: tracked.url, headSha: live.headSha });
 
 		const clone = await clones.prepareClone(tracked);
-		const outcome = await runInClone(clone, (clonePath) =>
-			claude.runReview({ pullRequestUrl: tracked.url, clonePath, onProgress: params.onProgress }),
-		);
+		const outcome = await runInClone(clone, async (clonePath) => {
+			if (findRelease(params, false) !== null) {
+				jobLogger.info('review_run_skipped', { reason: 'released_before_run' });
+
+				return null;
+			}
+
+			return claude.runReview({
+				pullRequestUrl: tracked.url,
+				clonePath,
+				onProgress: params.onProgress,
+				signal: params.signal,
+			});
+		});
 		const release = findRelease(params, false);
 
-		if (release !== null) {
-			releaseJob(params, release);
+		if (release !== null || outcome === null) {
+			releaseJob(params, release ?? 'discard');
 
 			return COMPLETED;
 		}

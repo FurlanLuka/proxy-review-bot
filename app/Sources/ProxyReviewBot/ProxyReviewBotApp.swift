@@ -24,10 +24,20 @@ struct ProxyReviewBotApp: App {
             if let pullRequestID {
                 DraftEditorWindowView(model: appDelegate.model, pullRequestID: pullRequestID)
             } else {
-                DraftEditorPlaceholderView()
+                WindowPlaceholderView()
             }
         }
         .defaultSize(DraftEditorWindow.defaultSize)
+        .windowResizability(.contentMinSize)
+
+        WindowGroup("History", id: HistoryWindow.id, for: String.self) { $value in
+            if value == HistoryWindow.value {
+                HistoryWindowView(model: appDelegate.model)
+            } else {
+                WindowPlaceholderView()
+            }
+        }
+        .defaultSize(HistoryWindow.defaultSize)
         .windowResizability(.contentMinSize)
     }
 }

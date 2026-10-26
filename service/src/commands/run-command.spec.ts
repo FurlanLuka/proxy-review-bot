@@ -27,6 +27,35 @@ describe('runCommand', () => {
 	});
 });
 
+describe('runCommand abort', () => {
+	it('aborting kills the process group right away', async () => {
+		const abortController = new AbortController();
+		const running = runCommand({
+			command: '/bin/sh',
+			args: ['-c', 'sleep 5'],
+			timeoutMs: 10_000,
+			signal: abortController.signal,
+		});
+
+		setTimeout(() => abortController.abort(), 50);
+
+		const result = await running;
+
+		expect(result.isTimedOut).toBe(false);
+		expect(result.durationMs).toBeLessThan(2000);
+	});
+
+	it('an already aborted signal → the command is killed as soon as it starts', async () => {
+		const result = await runCommand({
+			command: '/bin/sh',
+			args: ['-c', 'sleep 5'],
+			signal: AbortSignal.abort(),
+		});
+
+		expect(result.durationMs).toBeLessThan(2000);
+	});
+});
+
 describe('runCommand line streaming robustness', () => {
 	it('a multi-byte character split across chunks stays intact', async () => {
 		const lines: string[] = [];

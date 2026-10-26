@@ -2,7 +2,13 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'bun:test';
 import { ANCHOR_TIME, makeDraft } from '../test-support/factories.js';
 import envelopeFixture from './fixtures/claude-envelope-success.json';
-import { parseClaudeOutput, REPLY_RESULT_SCHEMA, REVIEW_RESULT_SCHEMA } from './review-result.js';
+import { REVIEW_SYSTEM_PROMPT } from '../claude/prompts.js';
+import {
+	parseClaudeOutput,
+	REPLY_RESULT_SCHEMA,
+	REVIEW_RESULT_JSON_SCHEMA,
+	REVIEW_RESULT_SCHEMA,
+} from './review-result.js';
 
 const output = (stdout: string, overrides = {}) => ({
 	exitCode: 0,
@@ -246,4 +252,47 @@ describe('error detection on stream-json output', () => {
 			'setup_broken',
 		);
 	});
+});
+
+describe('what the bot asks Claude for', () => {
+	it('the JSON schema asks only for what the parser requires; the prompt lists required fields per outcome', () => {
+		const commentItems = REVIEW_RESULT_JSON_SCHEMA.properties.comments.items;
+
+		expect(commentItems.required).toEqual(['path', 'line', 'body']);
+		expect(REVIEW_RESULT_JSON_SCHEMA.required).toEqual(['outcome', 'summary']);
+		expect(REVIEW_SYSTEM_PROMPT).toContain('"drafted": outcome, filing, headRefOid, summary.');
+		expect(
+			parseReview(
+				envelopeWith({
+					outcome: 'drafted',
+					filing: 'comment',
+					headRefOid: 'h',
+					summary: 's',
+					comments: [{ path: 'a.ts', line: 3, body: 'x' }],
+				}),
+			),
+		).toMatchObject({ kind: 'result', result: { comments: [{ side: 'RIGHT' }] } });
+	});
+
+	const MINIMAL_RESULTS: Record<string, Record<string, unknown>> = {
+		drafted: { outcome: 'drafted', filing: 'comment', headRefOid: 'h', summary: 's' },
+		nothing_new: { outcome: 'nothing_new', headRefOid: 'h', summary: 's' },
+		blocked: { outcome: 'blocked', reason: 'other', summary: 's' },
+		failed: { outcome: 'failed', summary: 's' },
+	};
+
+	for (const [outcome, minimal] of Object.entries(MINIMAL_RESULTS)) {
+		it(`"${outcome}" with exactly the prompt's required fields → parsed; drop any one → thrown away`, () => {
+			const requiredFields = Object.keys(minimal);
+
+			expect(REVIEW_SYSTEM_PROMPT).toContain(`"${outcome}": ${requiredFields.join(', ')}.`);
+			expect(parseReview(envelopeWith(minimal)).kind).toBe('result');
+
+			for (const field of requiredFields) {
+				const { [field]: _dropped, ...withoutField } = minimal;
+
+				expect(parseReview(envelopeWith(withoutField)).kind).toBe('failed');
+			}
+		});
+	}
 });

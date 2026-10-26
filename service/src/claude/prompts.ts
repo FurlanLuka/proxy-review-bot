@@ -15,6 +15,12 @@ Outcomes:
 - "blocked": one of the skill's stop conditions (snapshot_unstable, diff_mismatch, missing_access, other). Merge conflicts are findings, not blockers.
 - "failed": anything else that prevented a review.
 
+Required fields per outcome (a result missing them is thrown away):
+- "drafted": outcome, filing, headRefOid, summary. Always include mainReview, comments and fileComments too, using "" and [] when empty. Inline comments need path, line (a whole number) and body; side defaults to RIGHT.
+- "nothing_new": outcome, headRefOid, summary.
+- "blocked": outcome, reason, summary.
+- "failed": outcome, summary.
+
 Progress reporting (the developer's menu shows it live):
 - Before each major step, print exactly one line on its own, with nothing else on that line:
   PRB_STATUS {"phase":"<gather|review|verify|draft>","message":"<what you are doing now, present tense, under 80 characters>"}

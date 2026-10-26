@@ -100,6 +100,39 @@ Every request carries `Authorization: Bearer <PRB_TOKEN>`. A request without it 
   - A subagent's `status` is `running`, `completed` or `failed`.
 - Rows are ordered by `updatedAt` descending. `done` rows are only included for 24 hours.
 
+## GET /history
+
+Finished PRs from the last 30 days, newest first, at most 200.
+
+```json
+{
+	"entries": [
+		{
+			"id": 3,
+			"owner": "acme",
+			"repo": "api",
+			"number": 412,
+			"title": "Fix auth retry",
+			"url": "https://github.com/acme/api/pull/412",
+			"author": "ana",
+			"outcome": "approved_by_bot",
+			"rounds": 2,
+			"finishedAt": 1793015179000
+		}
+	]
+}
+```
+
+- `outcome`: how the bot's work on the PR ended, checked in this order:
+  - `approved_by_bot`: the bot posted an approval (auto-approve, Approve, or an approving draft). This wins even if the PR merged afterwards, or you pressed Stop while the approval was posting;
+  - `stopped`: you stopped the bot on this PR;
+  - `taken_over`: you reviewed the PR yourself, so the bot stepped back. This wins over a later merge or close;
+  - `approved_by_you`: the PR was approved, but not by the bot;
+  - `merged`, `closed`: the PR was merged or closed.
+- Only the latest review cycle counts: a re-request or a Retry starts a new cycle, and earlier rounds don't affect `outcome`.
+- A PR the bot gave up on is still open, so it isn't listed.
+- `finishedAt`: epoch ms when the PR reached that state.
+
 ## Actions
 
 Every action is a POST, returns `{ "ok": true }` with status 200, and returns `{ "error": "<code>" }` on failure.
@@ -108,7 +141,7 @@ Every action is a POST, returns `{ "ok": true }` with status 200, and returns `{
 |---|---|---|
 | `/prs/:id/review` | queue a review (manual mode, or Review again) | 404, 409 `busy` (a review or approval is running) |
 | `/prs/:id/approve` | approve an `awaiting_approval` PR, or a `draft_ready` PR whose draft filing is `approve`, unedited | 404, 409 `head_moved` (the PR is re-queued), 409 `not_awaiting_approval`, 409 `busy` |
-| `/prs/:id/stop` | stop the bot on this PR | 404 |
+| `/prs/:id/stop` | stop the bot on this PR; a running Claude review is killed right away | 404 |
 | `/prs/:id/post` | post the draft, edited or not; body below | 404, 400 `invalid_draft` with a `reason`, 409 `no_draft`, `head_moved` (the PR is re-reviewed), `busy` |
 | `/prs/:id/discard` | throw the draft away; the PR waits for new commits | 404, 409 `no_draft` |
 | `/prs/:id/retry` | reset rounds and attempts, then queue a review | 404, 409 `busy` |

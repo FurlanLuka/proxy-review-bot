@@ -6,6 +6,9 @@ import type { PullRequestReference } from '../github/github-types.js';
 import type { Logger } from '../logging/logger.js';
 
 const WORKTREES_DIRECTORY = '.worktrees';
+const GIT_LOCK_PATTERN = /cannot lock ref|Unable to create '[^']*\.lock': File exists/i;
+const GIT_LOCK_RETRIES = 3;
+const GIT_LOCK_BACKOFF_MS = 500;
 
 export interface PreparedClone {
 	path: string;
@@ -34,6 +37,7 @@ interface CreateCloneManagerParams {
 	runCommand: RunCommand;
 	logger: Logger;
 	env: Record<string, string | undefined>;
+	sleep?: (milliseconds: number) => Promise<void>;
 }
 
 interface RemoveStaleWorktreesParams {
@@ -61,6 +65,7 @@ export const createCloneManager = ({
 	runCommand,
 	logger,
 	env,
+	sleep = Bun.sleep,
 }: CreateCloneManagerParams): CloneManager => {
 	const pendingByRepo = new Map<string, Promise<unknown>>();
 	const cleanedRepos = new Set<string>();
@@ -70,6 +75,25 @@ export const createCloneManager = ({
 
 		if (result.exitCode !== 0) {
 			throw new Error(`${command} ${args.slice(0, 3).join(' ')} failed: ${result.stderr.trim()}`);
+		}
+	};
+
+	const runGitRetryingLocks = async (args: string[]): Promise<void> => {
+		for (let attempt = 1; ; attempt++) {
+			try {
+				await runChecked(gitPath, args);
+
+				return;
+			} catch (error) {
+				const isLockError = error instanceof Error && GIT_LOCK_PATTERN.test(error.message);
+
+				if (!isLockError || attempt > GIT_LOCK_RETRIES) {
+					throw error;
+				}
+
+				logger.warn('git_lock_retry', { args: args.slice(2, 4), attempt });
+				await sleep(GIT_LOCK_BACKOFF_MS * attempt);
+			}
 		}
 	};
 
@@ -119,12 +143,12 @@ export const createCloneManager = ({
 			cleanedRepos.add(key);
 		}
 
-		await runChecked(gitPath, ['-C', clonePath, 'fetch', '--prune', 'origin']);
+		await runGitRetryingLocks(['-C', clonePath, 'fetch', '--prune', 'origin']);
 
 		const worktreePath = join(worktreesDirectory, randomUUID());
 
 		mkdirSync(worktreesDirectory, { recursive: true });
-		await runChecked(gitPath, [
+		await runGitRetryingLocks([
 			'-C',
 			clonePath,
 			'worktree',

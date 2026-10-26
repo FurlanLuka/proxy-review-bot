@@ -182,6 +182,22 @@ describe('draft routes with a held draft', () => {
 	});
 });
 
+describe('GET /history', () => {
+	it('→ 200 with an entries array', async () => {
+		const { call, github, bot } = setUp();
+
+		github.addPullRequest(7);
+		await bot.tick();
+		bot.stop(bot.getState().pullRequests[0]?.id ?? 0);
+
+		const body = (await (await call('GET', '/history')).json()) as {
+			entries: { number: number; outcome: string }[];
+		};
+
+		expect(body.entries).toEqual([expect.objectContaining({ number: 7, outcome: 'stopped' })]);
+	});
+});
+
 describe('api request logging', () => {
 	it('routine GET /state polls are not logged; other requests are', async () => {
 		const harness = createTestHarness();

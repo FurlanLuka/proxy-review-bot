@@ -58,8 +58,37 @@ enum SnapshotRenderer {
                 name: "draft",
                 into: directory
             )
+            await render(
+                HistoryContentView(entries: sampleHistory(), now: Date())
+                    .frame(width: HistoryWindow.defaultSize.width, height: HistoryWindow.defaultSize.height),
+                name: "history",
+                into: directory
+            )
             NSApp.terminate(nil)
         }
+    }
+
+    private static func sampleHistory() -> [HistoryEntry] {
+        let now = Date().timeIntervalSince1970 * 1000
+        let hour = 3_600_000.0
+        let samples: [(repo: String, title: String, number: Int, author: String, outcome: String, rounds: Int, hoursAgo: Double)] = [
+            ("api", "Fix auth retry", 412, "ana", "approved_by_bot", 2, 1),
+            ("web", "Dark mode tokens", 91, "sam", "merged", 3, 3),
+            ("billing", "Invoice export", 201, "kai", "taken_over", 1, 27),
+            ("search", "Reindex job", 5, "mo", "closed", 1, 30),
+            ("docs", "Update setup guide", 19, "lee", "approved_by_you", 2, 52),
+            ("ios", "Widget refresh", 77, "ana", "stopped", 0, 75),
+        ]
+        let entries = samples.enumerated().map { index, sample -> [String: Any] in
+            [
+                "id": index + 1, "owner": "acme", "repo": sample.repo, "number": sample.number, "title": sample.title,
+                "url": "https://github.com/acme/\(sample.repo)/pull/\(sample.number)", "author": sample.author,
+                "outcome": sample.outcome, "rounds": sample.rounds, "finishedAt": now - sample.hoursAgo * hour,
+            ]
+        }
+        let data = try! JSONSerialization.data(withJSONObject: ["entries": entries])
+
+        return try! JSONDecoder().decode(HistoryResponse.self, from: data).entries
     }
 
     private static func sampleDraftPullRequest() -> PullRequest {

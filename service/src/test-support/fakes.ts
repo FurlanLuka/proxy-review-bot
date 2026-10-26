@@ -147,6 +147,7 @@ export interface FakeClaude extends ClaudeClient {
 	reviewError: Error | null;
 	reviewSyncError: Error | null;
 	reviewGatesByUrl: Map<string, Promise<void>>;
+	abortedReviews: string[];
 	reviewProgressLines: string[];
 	replyEntered: Promise<void>;
 	waitForReviewCall: (count: number) => Promise<void>;
@@ -164,7 +165,11 @@ export const createFakeClaude = (): FakeClaude => {
 		}
 	};
 
-	const runFakeReview: ClaudeClient['runReview'] = async ({ pullRequestUrl, onProgress }) => {
+	const runFakeReview: ClaudeClient['runReview'] = async ({
+		pullRequestUrl,
+		onProgress,
+		signal,
+	}) => {
 		fake.reviewCalls.push(pullRequestUrl);
 
 		if (fake.reviewError !== null) {
@@ -182,10 +187,16 @@ export const createFakeClaude = (): FakeClaude => {
 
 		notifyReviewWaiters();
 
-		await fake.reviewGatesByUrl.get(pullRequestUrl);
+		const aborted = Promise.withResolvers<'aborted'>();
 
-		if (fake.reviewGate !== null) {
-			await fake.reviewGate;
+		signal?.addEventListener('abort', () => aborted.resolve('aborted'), { once: true });
+
+		const gates = Promise.all([fake.reviewGatesByUrl.get(pullRequestUrl), fake.reviewGate]);
+
+		if ((await Promise.race([gates, aborted.promise])) === 'aborted' || signal?.aborted) {
+			fake.abortedReviews.push(pullRequestUrl);
+
+			return { kind: 'failed', summary: 'Claude exited null without a result' };
 		}
 
 		return fake.reviewOutcomes.shift() ?? { kind: 'failed', summary: 'no fake outcome queued' };
@@ -209,6 +220,7 @@ export const createFakeClaude = (): FakeClaude => {
 		reviewError: null,
 		reviewSyncError: null,
 		reviewGatesByUrl: new Map(),
+		abortedReviews: [],
 		reviewProgressLines: [],
 		replyGate: null,
 		replyError: null,

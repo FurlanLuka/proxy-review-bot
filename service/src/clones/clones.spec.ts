@@ -37,12 +37,14 @@ interface CreateManagerParams {
 	clonesDirectory?: string;
 	runCommand: RunCommand;
 	logger?: Logger;
+	sleep?: (milliseconds: number) => Promise<void>;
 }
 
 const createManager = ({
 	clonesDirectory = mkdtempSync(join(tmpdir(), 'prb-clones-')),
 	runCommand: run,
 	logger = createSilentLogger(),
+	sleep = async () => {},
 }: CreateManagerParams) => {
 	const clones = createCloneManager({
 		clonesDirectory,
@@ -51,6 +53,7 @@ const createManager = ({
 		runCommand: run,
 		logger,
 		env: {},
+		sleep,
 	});
 
 	return { clones, clonesDirectory };
@@ -217,5 +220,86 @@ describe('createCloneManager with a real git repo', () => {
 		expect(clone.path.startsWith(join(clonesDirectory, '.worktrees'))).toBe(true);
 
 		await clone.release();
+	});
+});
+
+describe('git lock errors', () => {
+	const lockFailure = (stderr: string) => ({ ...SUCCESS, exitCode: 1, stderr });
+
+	const createLockingRunCommand = (failures: string[], failingCommand = 'fetch') => {
+		const calls: string[][] = [];
+
+		const run: RunCommand = async ({ args }) => {
+			calls.push(args);
+
+			const isFailingCommand = args.includes(failingCommand);
+			const failure = isFailingCommand ? failures.shift() : undefined;
+
+			return failure === undefined ? SUCCESS : lockFailure(failure);
+		};
+
+		return { run, calls };
+	};
+
+	it('a fetch that hits a ref lock is retried with growing backoff, then succeeds', async () => {
+		const { run, calls } = createLockingRunCommand([
+			"error: cannot lock ref 'refs/remotes/origin/main'",
+			"fatal: Unable to create '/x/.git/shallow.lock': File exists.",
+		]);
+		const delays: number[] = [];
+		const warnings: string[] = [];
+		const { clones } = createManager({
+			runCommand: run,
+			sleep: async (milliseconds) => {
+				delays.push(milliseconds);
+			},
+			logger: {
+				...createSilentLogger(),
+				warn: (event) => {
+					warnings.push(event);
+				},
+			},
+		});
+
+		const clone = await clones.prepareClone({ owner: 'acme', repo: 'api', number: 1 });
+
+		expect(clone.path).toContain('.worktrees');
+		expect(calls.filter((args) => args.includes('fetch'))).toHaveLength(3);
+		expect(delays).toEqual([500, 1000]);
+		expect(warnings).toEqual(['git_lock_retry', 'git_lock_retry']);
+	});
+
+	it('a worktree add that hits a lock is retried too', async () => {
+		const { run, calls } = createLockingRunCommand(
+			["fatal: Unable to create '/x/.git/worktrees.lock': File exists."],
+			'add',
+		);
+		const { clones } = createManager({ runCommand: run });
+
+		const clone = await clones.prepareClone({ owner: 'acme', repo: 'api', number: 1 });
+
+		expect(clone.path).toContain('.worktrees');
+		expect(calls.filter((args) => args.includes('add'))).toHaveLength(2);
+	});
+
+	it('still locked after three retries → the prepare fails', async () => {
+		const lockError = "error: cannot lock ref 'refs/remotes/origin/main'";
+		const { run, calls } = createLockingRunCommand([lockError, lockError, lockError, lockError]);
+		const { clones } = createManager({ runCommand: run });
+
+		await expect(clones.prepareClone({ owner: 'acme', repo: 'api', number: 1 })).rejects.toThrow(
+			'cannot lock ref',
+		);
+		expect(calls.filter((args) => args.includes('fetch'))).toHaveLength(4);
+	});
+
+	it('any other git error is not retried', async () => {
+		const { run, calls } = createLockingRunCommand(['fatal: repository not found']);
+		const { clones } = createManager({ runCommand: run });
+
+		await expect(clones.prepareClone({ owner: 'acme', repo: 'api', number: 1 })).rejects.toThrow(
+			'repository not found',
+		);
+		expect(calls.filter((args) => args.includes('fetch'))).toHaveLength(1);
 	});
 });

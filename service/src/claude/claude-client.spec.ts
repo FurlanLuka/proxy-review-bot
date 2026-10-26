@@ -10,6 +10,41 @@ const RECORDED_STREAM = readFileSync(
 	'utf8',
 );
 
+describe('createClaudeClient().runReview abort', () => {
+	it('passes the signal to the command; an aborted run fails and is logged as aborted', async () => {
+		const controller = new AbortController();
+		const signals: (AbortSignal | undefined)[] = [];
+		const warnings: (Record<string, unknown> | undefined)[] = [];
+		const client = createClaudeClient({
+			claudePath: '/bin/claude',
+			shimDirectory: '/shims',
+			runCommand: async ({ signal }) => {
+				signals.push(signal);
+				controller.abort();
+
+				return { exitCode: null, stdout: '', stderr: '', isTimedOut: false, durationMs: 1 };
+			},
+			logger: {
+				...createSilentLogger(),
+				warn: (_event, fields) => {
+					warnings.push(fields);
+				},
+			},
+			baseEnv: { PATH: '/usr/bin' },
+		});
+
+		const outcome = await client.runReview({
+			pullRequestUrl: 'https://github.com/acme/api/pull/7',
+			clonePath: '/clone',
+			signal: controller.signal,
+		});
+
+		expect(signals).toEqual([controller.signal]);
+		expect(outcome.kind).toBe('failed');
+		expect(warnings[0]).toMatchObject({ isAborted: true });
+	});
+});
+
 describe('createClaudeClient().runReview failure logging', () => {
 	it('a result with the wrong shape → one warn claude_run_finished listing the issues', async () => {
 		const envelope = JSON.stringify({

@@ -5,6 +5,15 @@ struct StatusAppearance {
     let symbol: String
     let color: PastelColor
 
+    static func of(_ glyph: PullRequestGlyph) -> StatusAppearance {
+        switch glyph {
+        case .failedReview:
+            return StatusAppearance(symbol: "exclamationmark.triangle.fill", color: Palette.rose)
+        case .status(let status):
+            return of(status)
+        }
+    }
+
     static func of(_ status: PullRequestStatus) -> StatusAppearance {
         switch status {
         case .needsReview:
@@ -32,12 +41,20 @@ struct StatusAppearance {
 }
 
 struct StatusGlyph: View {
-    let status: PullRequestStatus
+    let glyph: PullRequestGlyph
 
     @Environment(\.accessibilityReduceMotion) private var isReducingMotion
 
+    init(glyph: PullRequestGlyph) {
+        self.glyph = glyph
+    }
+
+    init(status: PullRequestStatus) {
+        glyph = .status(status)
+    }
+
     var body: some View {
-        let appearance = StatusAppearance.of(status)
+        let appearance = StatusAppearance.of(glyph)
 
         ZStack {
             Circle()
@@ -46,10 +63,10 @@ struct StatusGlyph: View {
             Image(systemName: appearance.symbol)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(appearance.color.ink)
-                .symbolEffect(.pulse, isActive: status == .reviewing && !isReducingMotion)
+                .symbolEffect(.pulse, isActive: glyph == .status(.reviewing) && !isReducingMotion)
         }
         .frame(width: 30, height: 30)
         .accessibilityElement()
-        .accessibilityLabel(status.displayName)
+        .accessibilityLabel(glyph.accessibilityLabel)
     }
 }

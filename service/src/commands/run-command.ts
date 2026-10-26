@@ -17,6 +17,7 @@ export interface RunCommandParams {
 	input?: string;
 	timeoutMs?: number;
 	onStdoutLine?: (line: string) => void;
+	signal?: AbortSignal;
 }
 
 export type RunCommand = (params: RunCommandParams) => Promise<CommandResult>;
@@ -51,6 +52,7 @@ export const runCommand: RunCommand = ({
 	input,
 	timeoutMs,
 	onStdoutLine,
+	signal,
 }) => {
 	const startedAt = performance.now();
 
@@ -74,6 +76,13 @@ export const runCommand: RunCommand = ({
 			state.isTimedOut = true;
 			killProcessGroup(child.pid);
 		}, timeoutMs ?? DEFAULT_TIMEOUT_MS);
+		const abort = (): void => killProcessGroup(child.pid);
+
+		signal?.addEventListener('abort', abort, { once: true });
+
+		if (signal?.aborted) {
+			abort();
+		}
 
 		const lineBuffer = { pending: '' };
 		const decoder = new StringDecoder('utf8');
@@ -104,11 +113,13 @@ export const runCommand: RunCommand = ({
 		child.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
 		child.on('error', (error) => {
 			clearTimeout(timer);
+			signal?.removeEventListener('abort', abort);
 			runningProcessIds.delete(processId ?? -1);
 			reject(error);
 		});
 		child.on('close', (exitCode) => {
 			clearTimeout(timer);
+			signal?.removeEventListener('abort', abort);
 
 			const remainder = lineBuffer.pending + decoder.end();
 

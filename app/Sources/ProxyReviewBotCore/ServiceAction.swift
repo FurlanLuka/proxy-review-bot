@@ -6,6 +6,7 @@ public enum ServiceAction: Equatable, Sendable {
     case stop(pullRequestID: Int)
     case retry(pullRequestID: Int)
     case fetchDraft(pullRequestID: Int)
+    case fetchHistory
     case postDraft(pullRequestID: Int, request: ReviewPostRequest)
     case discardDraft(pullRequestID: Int)
     case pause
@@ -13,11 +14,12 @@ public enum ServiceAction: Equatable, Sendable {
     case checkReadiness
 
     public var method: String {
-        if case .fetchDraft = self {
+        switch self {
+        case .fetchDraft, .fetchHistory:
             return "GET"
+        default:
+            return "POST"
         }
-
-        return "POST"
     }
 
     public var path: String {
@@ -32,6 +34,8 @@ public enum ServiceAction: Equatable, Sendable {
             return "/prs/\(pullRequestID)/retry"
         case .fetchDraft(let pullRequestID):
             return "/prs/\(pullRequestID)/draft"
+        case .fetchHistory:
+            return "/history"
         case .postDraft(let pullRequestID, _):
             return "/prs/\(pullRequestID)/post"
         case .discardDraft(let pullRequestID):

@@ -1,3 +1,5 @@
+import { buildHistory } from '../history/history.js';
+import type { HistoryEntry } from '../history/history.js';
 import { buildReviewCycleReset } from '../review/pull-request-updates.js';
 import type { ReviewProgress } from '../review/review-progress.js';
 import type { PullRequestUpdate, TrackedPullRequest } from '../tracking/tracking-types.js';
@@ -20,6 +22,7 @@ export interface Bot {
 	tick(): Promise<void>;
 	waitForIdle(): Promise<void>;
 	getState(): BotState;
+	getHistory(): HistoryEntry[];
 	requestReview(id: number): ActionResult;
 	retry(id: number): ActionResult;
 	stop(id: number): ActionResult;
@@ -47,6 +50,7 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 	};
 	const runningJobs = new Set<Promise<void>>();
 	const reviewingIds = new Set<number>();
+	const reviewAborts = new Map<number, AbortController>();
 	const approvingIds = new Set<number>();
 	const reviewProgressById = new Map<number, ReviewProgress>();
 	const replyProgress: { current: ReplyProgress | null } = { current: null };
@@ -105,7 +109,10 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 	};
 
 	const startReviewJob = (tracked: TrackedPullRequest, viewerLogin: string): void => {
+		const abortController = new AbortController();
+
 		reviewingIds.add(tracked.id);
+		reviewAborts.set(tracked.id, abortController);
 		trackJob(
 			runReviewJob({
 				dependencies,
@@ -113,12 +120,25 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 				viewerLogin,
 				isPaused,
 				onProgress: (progress) => reviewProgressById.set(tracked.id, progress),
+				signal: abortController.signal,
 			}),
 			() => {
 				reviewingIds.delete(tracked.id);
+				reviewAborts.delete(tracked.id);
 				reviewProgressById.delete(tracked.id);
 			},
 		);
+	};
+
+	const abortUnwantedReviews = (): void => {
+		for (const [id, abortController] of reviewAborts) {
+			const status = store.getPullRequest(id)?.status;
+
+			if (status !== 'reviewing' && !abortController.signal.aborted) {
+				abortController.abort();
+				logger.info('review_run_aborted', { id, status });
+			}
+		}
 	};
 
 	const startReplyJob = (viewerLogin: string): void => {
@@ -191,6 +211,7 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 			}
 
 			await syncPullRequests({ dependencies, viewerLogin, isPaused: isPaused() });
+			abortUnwantedReviews();
 
 			if (canRunJobs()) {
 				startJobs(viewerLogin);
@@ -218,6 +239,7 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 		store.updatePullRequest(id, { ...update, updatedAt: now() });
 		store.recordActivity(id, 'manual_action', update);
 		logger.info('pull_request_manual_action', { id, from: tracked.status, to: update.status });
+		abortUnwantedReviews();
 
 		return 'ok';
 	};
@@ -253,6 +275,7 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 				await Promise.all(runningJobs);
 			}
 		},
+		getHistory: () => buildHistory({ store, now: now() }),
 		getState: () =>
 			buildBotState({
 				trackedPullRequests: store.listPullRequests(),
@@ -271,7 +294,15 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 				nextEligibleAt: null,
 				pendingApproval: null,
 			}),
-		retry: (id) => applyManualAction(id, { ...buildReviewCycleReset(now()), status: 'queued' }),
+		retry: (id) => {
+			const result = applyManualAction(id, { ...buildReviewCycleReset(now()), status: 'queued' });
+
+			if (result === 'ok') {
+				store.recordActivity(id, 'retry', {});
+			}
+
+			return result;
+		},
 		stop: (id) => applyManualAction(id, { status: 'stopped', pendingApproval: null }),
 		approve,
 		getDraft: (id) => findHeldDraft(dependencies, id),

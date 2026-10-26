@@ -75,7 +75,7 @@ export const REVIEW_RESULT_JSON_SCHEMA = {
 					side: { type: 'string', enum: ['LEFT', 'RIGHT'] },
 					body: stringProperty,
 				},
-				required: ['path', 'line', 'side', 'body'],
+				required: ['path', 'line', 'body'],
 			},
 		},
 		fileComments: {

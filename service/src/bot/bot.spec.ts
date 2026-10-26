@@ -339,6 +339,101 @@ describe('bot in auto mode', () => {
 	});
 });
 
+describe('stopping a review before Claude starts', () => {
+	it('stopped while the clone is prepared → Claude never runs, nothing posted, worktree released', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+		const prepareGate = createGate();
+		const prepareClone = setup.clones.prepareClone;
+
+		setup.github.addPullRequest(7);
+
+		setup.clones.prepareClone = async (reference) => {
+			await prepareGate.promise;
+
+			return prepareClone(reference);
+		};
+
+		await setup.bot.tick();
+		await waitUntil(() => setup.statusOf(7)?.status === 'reviewing');
+		setup.bot.stop(setup.statusOf(7)?.id ?? 0);
+		prepareGate.open();
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toEqual([]);
+		expect(setup.github.submissions).toEqual([]);
+		expect(setup.clones.released).toHaveLength(1);
+		expect(setup.statusOf(7)?.status).toBe('stopped');
+	});
+});
+
+describe('stopping a running review', () => {
+	it('Stop kills the Claude run, frees its slot for the next PR, and posts nothing for it', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+		const gate = createGate();
+
+		for (const number of [7, 8, 9, 10]) {
+			setup.github.addPullRequest(number);
+		}
+
+		setup.claude.reviewGate = gate.promise;
+		setup.claude.reviewOutcomes.push(...[1, 2, 3].map(() => draftedFor('head-1', 'comment')));
+		await setup.bot.tick();
+		await setup.claude.waitForReviewCall(3);
+
+		const stoppedUrl = setup.claude.reviewCalls[0] ?? '';
+		const stopped = setup.bot
+			.getState()
+			.pullRequests.find((pullRequest) => pullRequest.url === stoppedUrl);
+
+		expect(setup.bot.stop(stopped?.id ?? 0)).toBe('ok');
+
+		await Bun.sleep(0);
+
+		expect(setup.claude.abortedReviews).toEqual([stoppedUrl]);
+
+		await waitUntil(
+			() =>
+				setup.bot.getState().pullRequests.find((pullRequest) => pullRequest.url === stoppedUrl)
+					?.progress === null,
+		);
+		await setup.bot.tick();
+		await setup.claude.waitForReviewCall(4);
+
+		expect(setup.claude.reviewCalls).toHaveLength(4);
+
+		gate.open();
+		await setup.settle();
+
+		expect(setup.github.submissions).toHaveLength(3);
+		expect(
+			setup.bot.getState().pullRequests.find((pullRequest) => pullRequest.url === stoppedUrl)
+				?.status,
+		).toBe('stopped');
+	});
+
+	it('PR merged during a review → the run is killed on the next sync', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+		const entry = setup.github.addPullRequest(7);
+		const gate = createGate();
+
+		setup.claude.reviewGate = gate.promise;
+		await setup.bot.tick();
+		await setup.claude.waitForReviewCall(1);
+		entry.live.state = 'closed';
+		entry.live.isMerged = true;
+		await setup.bot.tick();
+		await Bun.sleep(0);
+
+		expect(setup.claude.abortedReviews).toEqual([entry.live.url]);
+
+		gate.open();
+		await setup.settle();
+
+		expect(setup.statusOf(7)?.status).toBe('done');
+		expect(setup.github.submissions).toEqual([]);
+	});
+});
+
 describe('parallel reviews', () => {
 	it('four queued PRs → three review at once, the fourth starts when a slot frees up', async () => {
 		const setup = setUp({ reviewMode: 'auto' });
@@ -459,6 +554,74 @@ describe('parallel reviews', () => {
 
 		secondGate.open();
 		await setup.settle();
+	});
+});
+
+describe('history', () => {
+	it('Retry records a retry activity that starts a new history cycle', async () => {
+		const setup = setUp({ reviewMode: 'manual' });
+
+		setup.github.addPullRequest(7);
+		await setup.tickAndSettle();
+
+		const id = setup.statusOf(7)?.id ?? 0;
+
+		setup.dependencies.store.updatePullRequest(id, { status: 'needs_you' });
+
+		expect(setup.bot.retry(id)).toBe('ok');
+		expect(setup.dependencies.store.listActivity(id).map((entry) => entry.kind)).toContain('retry');
+	});
+
+	it('finished PRs are listed newest first with how they ended; open and old ones are left out', async () => {
+		const setup = setUp({ reviewMode: 'auto', autoApprove: 'on' });
+		const merged = setup.github.addPullRequest(7);
+		setup.github.addPullRequest(8);
+		setup.github.addPullRequest(9);
+		setup.github.addPullRequest(10);
+		setup.github.addPullRequest(11);
+		setup.claude.reviewOutcomes.push(
+			draftedFor('head-1', 'comment'),
+			draftedFor('head-1', 'approve'),
+			draftedFor('head-1', 'comment'),
+			draftedFor('head-1', 'comment'),
+			draftedFor('head-1', 'comment'),
+		);
+		await setup.tickAndSettle();
+		await setup.tickAndSettle();
+
+		const gaveUpId = setup.statusOf(11)?.id ?? 0;
+
+		setup.dependencies.store.updatePullRequest(gaveUpId, { status: 'needs_you' });
+		setup.dependencies.store.recordActivity(gaveUpId, 'give_up', { kind: 'give_up' });
+		merged.live.state = 'closed';
+		merged.live.isMerged = true;
+		setup.clock.now += 60_000;
+		await setup.tickAndSettle();
+		setup.clock.now += 60_000;
+		setup.bot.stop(setup.statusOf(9)?.id ?? 0);
+
+		const history = setup.bot.getHistory();
+
+		expect(history.map(({ number, outcome }) => ({ number, outcome }))).toEqual([
+			{ number: 9, outcome: 'stopped' },
+			{ number: 7, outcome: 'merged' },
+			{ number: 8, outcome: 'approved_by_bot' },
+		]);
+		expect(history[0]).toMatchObject({
+			owner: 'acme',
+			repo: 'api',
+			url: 'https://github.com/acme/api/pull/9',
+			rounds: 1,
+			finishedAt: setup.clock.now,
+		});
+		expect(setup.statusOf(10)?.status).toBe('waiting_on_author');
+
+		setup.clock.now += 31 * 24 * 60 * 60_000;
+		setup.bot.stop(setup.statusOf(10)?.id ?? 0);
+
+		expect(setup.bot.getHistory().map(({ number, outcome }) => ({ number, outcome }))).toEqual([
+			{ number: 10, outcome: 'stopped' },
+		]);
 	});
 });
 
@@ -677,6 +840,25 @@ describe('approval edge cases', () => {
 
 		return setup;
 	};
+
+	it('PR merged before you approve → done, and history shows it as merged', async () => {
+		const setup = await reachAwaitingApproval();
+		const id = setup.statusOf(7)?.id ?? 0;
+		const entry = setup.github.pullRequests.get(7);
+
+		if (entry === undefined) {
+			throw new Error('missing PR 7');
+		}
+
+		entry.live.state = 'closed';
+		entry.live.isMerged = true;
+
+		expect(await setup.bot.approve(id)).toBe('not_awaiting_approval');
+		expect(setup.github.submissions).toEqual([]);
+		expect(setup.bot.getHistory().map(({ number, outcome }) => ({ number, outcome }))).toEqual([
+			{ number: 7, outcome: 'merged' },
+		]);
+	});
 
 	it('double click → exactly one APPROVE', async () => {
 		const setup = await reachAwaitingApproval();

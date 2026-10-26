@@ -73,6 +73,10 @@ const postHeldDraft = async ({
 			return { result: 'busy' };
 		case 'closed':
 			store.updatePullRequest(id, { status: 'done', pendingApproval: null, updatedAt: now() });
+			store.recordActivity(id, 'finish', {
+				kind: 'finish',
+				reason: live.isMerged ? 'merged' : 'closed',
+			});
 
 			return { result: missingDraftResult };
 		case 'head_moved':
