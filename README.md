@@ -1,127 +1,170 @@
-# Proxy Review Bot
+![Proxy Review Bot: the review window, with a draft and an approval waiting for you, a PR the bot gave up on, and reviews queued behind them](docs/images/window.png)
 
-A local macOS menu bar bot that reviews GitHub pull requests where you are personally requested, using the `proxy:pr-review` skill through `claude -p` on your Claude subscription. It posts under your own `gh` login, re-reviews on new pushes until the PR is approved, merged or closed, and answers follow-up questions in threads it started.
+[![Latest release](https://img.shields.io/github/v/release/FurlanLuka/proxy-review-bot?label=release)](https://github.com/FurlanLuka/proxy-review-bot/releases/latest)
+[![Platform: macOS on Apple silicon](https://img.shields.io/badge/platform-macOS%2014%2B%20%C2%B7%20Apple%20silicon-lightgrey)](#what-you-need-and-where-your-data-goes)
+[![Tests](https://github.com/FurlanLuka/proxy-review-bot/actions/workflows/test.yml/badge.svg)](https://github.com/FurlanLuka/proxy-review-bot/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-- `service/`: a Bun + TypeScript service. It polls GitHub, runs reviews, posts them, and serves the local API in [docs/service-api.md](docs/service-api.md).
-- `app/`: a SwiftUI menu bar app. It starts and supervises the service, lists what needs you, and holds the settings.
+**Your PR reviews, drafted while you work.** When someone requests your review on GitHub, Proxy
+Review Bot reviews the PR with [proxy](https://github.com/FurlanLuka/claude-proxy-plugin)'s
+`pr-review` skill, on your own Claude Code login, and hands you a draft to check. You edit it, pick
+Approve, Comment or Request Changes, and post. When the author pushes again, it reviews the new
+commits and you get the next draft.
 
-![Menu](docs/screenshots/final/dark/menu.png)
+It runs on your Mac, in the menu bar, using the `gh` login you already have. There's no server, no
+GitHub App and no webhook: it checks GitHub once a minute and keeps everything local.
 
-## What changed in 0.4.2
+[Try it](#try-it) · [What it's like](#what-its-like-to-use) · [Safety](#what-it-will-and-wont-do) ·
+[Underneath](#how-it-works-underneath) · [Where it stands](#where-it-stands) ·
+[Releases](https://github.com/FurlanLuka/proxy-review-bot/releases)
 
-- When a review finishes but Claude doesn't return its structured result, the bot resumes the same Claude session and asks for the result (up to 5 tries, shown as "Collecting the finished review") instead of redoing the review. If that still fails, the card says "Claude finished but never returned the review", and Review Again tries the saved session first. Failed final results are saved to `failed-results/` in the data folder (newest 10) for debugging.
-- Results recovered by a repair, or read from the end of Claude's reply text, are always held as a draft for you to approve, even in auto mode.
-- Each review now leaves a Claude Code session behind, stored under `~/.claude/projects/` (one folder per review worktree). They belong to the bot and are safe to ignore; Claude Code's normal session retention cleans them up. The transcripts contain the PR's content, which is untrusted, so treat them like the PR itself. Replies don't keep sessions. To look inside a failed one, run `claude --resume <sessionId>` with the `sessionId` from the `repair_started` line in the service log. A saved session is only reused for 24 hours, and never after the PR's head moves, you press Stop, or the PR is merged or closed. It is kept when the bot gives up after two failed attempts on a commit, so Review Again resumes it before running a full review.
+## Try it
 
-## What changed in 0.4.1
-
-- Bun is bundled inside the app, so there's nothing extra to install. The download is larger (about 26 MB).
-- Security fix: the gh/git guards no longer load a `.env` or `bunfig.toml` from the repo under review. Before 0.4.1, a PR could ship a `bunfig.toml` preload that ran code during a review.
-- If you installed Bun only for this bot, you can remove `~/.bun`. The installer never removes it.
-
-## What changed in 0.4.0
-
-- Once you start a review, the PR stays in In review until it's done. New commits, a re-request (even on the same commit) and a failed run after its backoff start the next round on their own, also in manual mode. You still check and post every draft.
-- Updating marks PRs that were already in progress as started, so they continue on their own.
-- A re-request skips the quiet period.
-- Switching from auto to manual mode keeps already-started PRs continuing.
-- The menu bar icon opens a window instead of a dropdown. Drafts, History and Settings open inside it with Back.
-
-## Requirements
-
-- macOS 14 or later, on Apple silicon.
-- `gh`, logged in.
-- Claude Code, logged in with your subscription (`claude auth login`).
-- The proxy plugin at version 1.6 or later, with the `pr-review` skill (`claude plugin update proxy@proxy-marketplace`).
-
-To build from source you also need Xcode or the Swift toolchain, and Bun 1.4.2 at `~/.bun/bin/bun` or on PATH.
-
-The menu shows a **Setup needed** section with the fix command for anything that's missing.
-
-## Install
-
-```sh
+```bash
 curl -fsSL https://raw.githubusercontent.com/FurlanLuka/proxy-review-bot/main/install.sh | sh
 ```
 
-If the repo is private, fetch the script through `gh` instead:
+The installer puts the app in `~/Applications`, adds a login item so it starts with your Mac and
+comes back if it crashes, and opens it. Click the icon in the menu bar. If something is missing (Claude Code
+not logged in, the proxy plugin not installed, `gh` not logged in) the window lists it with the
+exact command that fixes it.
 
-```sh
-gh api repos/FurlanLuka/proxy-review-bot/contents/install.sh -H 'Accept: application/vnd.github.raw' | sh
-```
+It starts in **manual mode**: nothing is reviewed until you click **Review**, and nothing is posted
+until you post it.
 
-The installer:
+## What it's like to use
 
-1. Checks for an Apple Silicon Mac on macOS 14 or later.
-2. Checks for `gh` and `git`. Nothing else is installed: the review service ships inside the app.
-3. Downloads the latest release using your `gh` login, and installs it to `~/Applications/ProxyReviewBot.app`.
-4. Adds a LaunchAgent (`~/Library/LaunchAgents/com.furlanluka.proxy-review-bot.plist`), so the app starts at login and restarts if it crashes. Quitting it from the menu keeps it quit until your next login.
-5. Starts the app.
+PRs that request your review show up under **Ready to review**. Click **Review** and the bot starts.
+Up to three reviews run at once, and you can watch each one's advisors work through it.
 
-Run the same command again to update. To uninstall, pass `--uninstall`; add `--purge` to also delete settings, the database and logs:
+![A review in progress: Product and Architecture done, Clean code and Tests still reading files, then the correctness pass](docs/images/progress.png)
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/FurlanLuka/proxy-review-bot/main/install.sh | sh -s -- --uninstall
-```
+From then on the PR stays under **In review** until it's done, and its card always says which step
+it's at and which round it's on:
 
-The **Launch at login** toggle in Settings adds or removes the same LaunchAgent.
+- **Waiting for you**: a draft is ready, or an approval is waiting for your click.
+- **Reviewing** or **Queued**: the bot is on it.
+- **Waiting on author**: your review is posted and the author has the next move.
 
-### Releasing
+When the author pushes new commits or re-requests your review, the next round starts by itself: the
+bot checks whether its earlier comments were addressed and reviews what changed, until the PR is
+approved, merged or closed, or it hits the round limit (5 by default). If someone replies in one of
+the bot's comment threads, it answers there.
 
-Push a version tag. The Release workflow tests the service and the app, builds `ProxyReviewBot_<version>_macos_arm64.zip` and publishes the release:
+**Review Draft…** opens the draft in the same window. Edit the main comment and each inline comment,
+drop the ones you don't want, jump to the line on GitHub, then post.
 
-```sh
-git tag v0.1.0 && git push origin v0.1.0
-```
+![A draft: the summary, the main review, inline comments with links to their lines, and Comment, Request Changes and Post Review at the bottom](docs/images/draft.png)
 
-To install a local build without a release:
+**History** shows how each PR ended over the last 30 days: approved by the bot, approved, merged,
+closed, reviewed by you, or stopped.
 
-```sh
-(cd app && ZIP_OUTPUT=/tmp/prb.zip scripts/build-app.sh) && PRB_LOCAL_ZIP=/tmp/prb.zip sh install.sh
-```
+![History, grouped by day, with an outcome on each PR](docs/images/history.png)
 
-## Build and run
+In **Settings** you can switch to **auto mode**, where comment reviews post on their own; choose
+whether approvals post on their own too (never, always, or only for small PRs); limit which orgs and
+repos it watches; and set the round limit and how often it checks.
 
-```sh
-cd service && ~/.bun/bin/bun install
-cd ../app && scripts/build-app.sh      # → app/build/ProxyReviewBot.app
-open app/build/ProxyReviewBot.app
-```
+## What it will and won't do
 
-To develop the service on its own, without the app:
+- **In manual mode nothing posts without you.** Every finished review is a draft first.
+- **Approvals wait for your click** unless you turn auto-approve on, and before approving it checks
+  the PR head hasn't moved since the review.
+- **Claude can read, never write.** Reviews run with read-only tools, and the `gh` and `git` that
+  Claude sees are guards that block every write. Only the bot itself posts, after you've seen the
+  draft (or in auto mode).
+- **A PR's own files can't run code.** The guards start outside the checked-out repo and ignore its
+  `.env`, `bunfig.toml` and `BUN_OPTIONS`.
+- **It steps back when you step in.** If you review a PR yourself, the bot stops on it.
+- **Its posts are marked**, with a "🤖 review bot" line and a hidden marker, so it never answers
+  itself or posts the same review twice.
+- **Reviews bill your Claude subscription.** `ANTHROPIC_API_KEY` is removed from every run.
+- **A review that finishes without a usable answer isn't thrown away.** The bot resumes that same
+  Claude session and asks for the result (up to 5 tries) instead of reviewing again, and anything
+  recovered this way is always held as a draft for you.
 
-```sh
-cd service
-PRB_DATA_DIR=/tmp/prb PRB_TOKEN=dev ~/.bun/bin/bun --no-env-file src/entry.ts
-curl -H 'Authorization: Bearer dev' http://127.0.0.1:<port>/state
-```
+## How it works underneath
 
-## Safety defaults
+Two pieces ship together in the app:
 
-- **First launch is manual mode.** Nothing is reviewed until you click **Review**, or switch to Auto in Settings.
-- **In manual mode nothing posts without you.**
-  - A finished review becomes a draft (**Needs you → Review draft**).
-  - You can edit the main comment and each inline comment, drop the ones you don't want, then post, approve or discard.
-  - If the author pushes while the draft waits, the draft is dropped and the new commits get reviewed.
-- **In auto mode, comment reviews post on their own.** Approvals still follow the auto-approve setting.
-- **Auto-approve is off by default.** Approvals wait for your click in the menu, and the bot re-checks that the PR head hasn't moved before approving.
-- **Claude runs read-only.** It runs with `--setting-sources user`, and its tools are limited to reading and subagents. `gh` and `git` are replaced by guards that block every write (`service/src/claude/command-guard.ts`), so only the service itself posts.
-- **Bot posts are marked.** Each one carries a "🤖 review bot" line and a hidden `<!-- proxy-review-bot head=<sha> -->` marker. The marker is used to avoid posting twice and to tell the bot's threads from yours.
-- **`ANTHROPIC_API_KEY` is removed** from every Claude run, so reviews bill your subscription.
-- **The bot steps back when you step in.** If you post your own review on a PR, the bot stops on it and moves it to **Needs you**.
+- **`service/`** is a TypeScript service, compiled with Bun into one binary inside the app. It
+  polls GitHub through `gh`, keeps its state in SQLite, runs reviews and posts them. The app talks to
+  it over a local HTTP API ([docs/service-api.md](docs/service-api.md)).
+- **`app/`** is the SwiftUI app: the menu bar icon, the window and the settings. It starts the
+  service and stops it when you quit.
 
-## Files
+Each review runs `claude -p "/proxy:pr-review <url>"` in its own git worktree of the PR's repo,
+asks for a structured result (summary, main comment, inline comments, a proposed filing), and the
+service turns that into a draft or a post. Reviews keep their Claude Code session, so a result that
+comes back malformed can be asked for again without redoing the work.
+
+## Where it stands
+
+I use it every day for the reviews I'm asked for at work. It's young and changes quickly, so expect
+things to move; the [release notes](https://github.com/FurlanLuka/proxy-review-bot/releases) say
+what changed. Every change goes through about 480 service tests, 90 app tests, and a check of the
+built app that the guards still block writes, before it's released.
+
+It reviews PRs that request you. Pasting any PR link (your own included) is next.
+
+## What you need, and where your data goes
+
+- macOS 14 or later on Apple silicon.
+- [GitHub CLI](https://cli.github.com) (`gh`), logged in, and `git`.
+- [Claude Code](https://code.claude.com/docs), logged in with your subscription.
+- The [proxy](https://github.com/FurlanLuka/claude-proxy-plugin) plugin, 1.6 or later:
+  `/plugin marketplace add FurlanLuka/claude-proxy-plugin`, then `/plugin install proxy@proxy-marketplace`.
+
+Nothing else is installed: the service and its runtime ship inside the app.
+
+The PR content goes to Anthropic through Claude Code, as with any review you'd run yourself, and
+reviews are posted to GitHub through `gh`. Everything else stays on your Mac:
 
 | What | Where |
 |---|---|
-| Settings | `~/Library/Application Support/ProxyReviewBot/settings.json` |
-| Database | `~/Library/Application Support/ProxyReviewBot/bot.sqlite` |
-| Repo clones the bot reviews in | `~/Library/Application Support/ProxyReviewBot/repos/` |
-| Logs (JSON lines) | `~/Library/Logs/ProxyReviewBot/service.log` |
+| Settings, database, repo clones | `~/Library/Application Support/ProxyReviewBot/` |
+| Logs (JSON lines, rotated at 5 MB) | `~/Library/Logs/ProxyReviewBot/service.log` |
+| Results Claude returned malformed (newest 10) | `~/Library/Application Support/ProxyReviewBot/failed-results/` |
+| Review sessions | `~/.claude/projects/`, cleaned up by Claude Code's normal retention |
 
-## Checks
+Review sessions contain the PR's content, which comes from its author, so treat them like the PR.
+To look inside one, run `claude --resume <sessionId>` with the id from the `repair_started` line in
+the log.
 
-```sh
-cd service && ~/.bun/bin/bun run check && ~/.bun/bin/bun test
-cd app && swift test
+## Updating and uninstalling
+
+Run the install command again to update; your settings and history stay. To uninstall, add
+`--uninstall`, and `--purge` to also delete settings, the database and logs:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/FurlanLuka/proxy-review-bot/main/install.sh | sh -s -- --uninstall
 ```
+
+You can also uninstall from Settings.
+
+## Developing
+
+You need Bun 1.4.2 and the Swift toolchain (Xcode or the command line tools).
+
+```bash
+cd service && bun install && bun run check && bun test
+cd ../app && swift test
+app/scripts/build-app.sh                  # → app/build/ProxyReviewBot.app
+```
+
+Run the service on its own, on throwaway data:
+
+```bash
+cd service
+PRB_DATA_DIR=/tmp/prb PRB_TOKEN=dev bun --no-env-file src/entry.ts
+curl -H 'Authorization: Bearer dev' http://127.0.0.1:<port>/state
+```
+
+Install a local build: `(cd app && ZIP_OUTPUT=/tmp/prb.zip scripts/build-app.sh) && PRB_LOCAL_ZIP=/tmp/prb.zip sh install.sh`.
+
+To release, push a version tag (`git tag v0.4.3 && git push origin v0.4.3`). CI tests both halves,
+builds and signs the app, checks the built binary's guards, and publishes the release.
+
+## License
+
+[MIT](LICENSE)
