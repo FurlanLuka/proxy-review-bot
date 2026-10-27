@@ -37,8 +37,6 @@ until you post it.
 PRs that request your review show up under **Ready to review**. Click **Review** and the bot starts.
 Up to three reviews run at once, and you can watch each one's advisors work through it.
 
-![A review in progress: Product and Architecture done, Clean code and Tests still reading files, then the correctness pass](docs/images/progress.png)
-
 From then on the PR stays under **In review** until it's done, and its card always says which step
 it's at and which round it's on:
 
@@ -54,12 +52,8 @@ the bot's comment threads, it answers there.
 **Review Draft…** opens the draft in the same window. Edit the main comment and each inline comment,
 drop the ones you don't want, jump to the line on GitHub, then post.
 
-![A draft: the summary, the main review, inline comments with links to their lines, and Comment, Request Changes and Post Review at the bottom](docs/images/draft.png)
-
 **History** shows how each PR ended over the last 30 days: approved by the bot, approved, merged,
 closed, reviewed by you, or stopped.
-
-![History, grouped by day, with an outcome on each PR](docs/images/history.png)
 
 In **Settings** you can switch to **auto mode**, where comment reviews post on their own; choose
 whether approvals post on their own too (never, always, or only for small PRs); limit which orgs and
