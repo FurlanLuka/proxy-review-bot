@@ -77,12 +77,12 @@ Every request carries `Authorization: Bearer <PRB_TOKEN>`. A request without it 
 - `readiness.status`: `ready`, `setup_needed` or `checking`.
 - `checks[].fix`: a shell command to show with a Copy button, or null.
 - `status`: one of `needs_review`, `queued`, `reviewing`, `waiting_on_author`, `awaiting_approval`, `draft_ready`, `blocked`, `needs_you`, `done`, `stopped`.
-  - `draft_ready` (manual mode): a finished review is waiting for you to check it. You can edit, post, approve or discard it. In auto mode, reviews post on their own.
+  - `draft_ready` (Post reviews: `ask`): a finished review is waiting for you to check it. You can edit, post, approve or discard it. With `postReviews: auto`, reviews post on their own.
 - `draft`: on `draft_ready` and `awaiting_approval` rows, `{ "filing": "comment" | "approve", "summary": "…", "commentCount": 3 }`; otherwise null.
 - `summary`: the last one-line review summary.
 - `reason`: why the PR is `needs_you`, `blocked` or failed.
-- `retryAt`: epoch ms when a failed review is tried again, on a `waiting_on_author` row with a `reason`, in auto mode or once the review has started; otherwise null.
-- `isStarted`: true once the PR's first review was queued (you clicked Review or Retry, or auto mode queued it). A started PR keeps going on its own, even in manual mode: new commits (after the quiet period), a re-request from the author on the same commit, and a failed run after its backoff all queue the next round. Manual mode still holds each round as a draft for you. Re-requesting a stopped PR starts over as not started. A re-request is read from the PR's own `requested_reviewers` each sync, not from search, so toggling draft or a lagging search index doesn't count as one; a re-request seen while the bot is paused, running or the PR is a draft is acted on once that ends. A re-request skips the quiet period.
+- `retryAt`: epoch ms when a failed review is tried again, on a `waiting_on_author` row with a `reason`, with `reviewMode: auto` (Start reviews: Automatically) or once the review has started; otherwise null.
+- `isStarted`: true once the PR's first review was queued (you clicked Review or Retry, or `reviewMode: auto` queued it). A started PR keeps going on its own, even with `reviewMode: manual`: new commits (after the quiet period), a re-request from the author on the same commit, and a failed run after its backoff all queue the next round. With `postReviews: ask` each round is still held as a draft for you. Re-requesting a stopped PR starts over as not started. A re-request is read from the PR's own `requested_reviewers` each sync, not from search, so toggling draft or a lagging search index doesn't count as one; a re-request seen while the bot is paused, running or the PR is a draft is acted on once that ends. A re-request skips the quiet period.
 - `reviewStartedAt`: epoch ms while the status is `reviewing`.
 - `progress`: live progress while a review or reply is running, otherwise null. It's kept in memory only:
 
@@ -154,7 +154,7 @@ Every action is a POST, returns `{ "ok": true }` with status 200, and returns `{
 
 | Route | Effect | Errors |
 |---|---|---|
-| `/prs/:id/review` | queue a review (manual mode, or Review again) | 404, 409 `busy` (a review or approval is running) |
+| `/prs/:id/review` | queue a review (`reviewMode: manual`, or Review again) | 404, 409 `busy` (a review or approval is running) |
 | `/prs/:id/approve` | approve an `awaiting_approval` PR, or a `draft_ready` PR whose draft filing is `approve`, unedited | 404, 409 `head_moved` (the PR is re-queued), 409 `not_awaiting_approval`, 409 `busy` |
 | `/prs/:id/stop` | stop the bot on this PR; a running Claude review is killed right away | 404 |
 | `/prs/:id/post` | post the draft, edited or not; body below | 404, 400 `invalid_draft` with a `reason`, 409 `no_draft`, `head_moved` (the PR is re-reviewed), `busy` |
@@ -235,6 +235,7 @@ Posts what you send, which can differ from the stored draft:
 ```json
 {
 	"reviewMode": "manual",
+	"postReviews": "ask",
 	"autoApprove": "off",
 	"smallPullRequestLineLimit": 200,
 	"maxRounds": 5,
@@ -246,7 +247,8 @@ Posts what you send, which can differ from the stored draft:
 }
 ```
 
-- `reviewMode`: `manual` or `auto`.
-- `autoApprove`: `off`, `on` or `small`.
+- `reviewMode`: who starts reviews (Start reviews in the app). `manual`: you click Review. `auto`: requested PRs are reviewed on their own.
+- `postReviews`: how finished reviews are posted (Post reviews in the app). `ask`: each review is held as a draft for you. `auto`: comment reviews post on their own, and an approving review follows `autoApprove`. It's independent of `reviewMode`. A body, or an older settings file, without it gets it derived from `reviewMode` (`auto` → `auto`, `manual` → `ask`). Changing it only affects reviews that finish afterwards; drafts already held stay until you act.
+- `autoApprove`: `off`, `on` or `small`. It only applies when `postReviews` is `auto`; with `off`, an approving review waits for your click.
 - `toolPaths`: each value is a string or null. null means look it up on PATH.
-- PUT takes the full object and returns the saved settings. An invalid body gets 400 `{ "error": "invalid_settings" }` and leaves the saved settings unchanged.
+- PUT takes the full object (`postReviews` may be left out, see above) and returns the saved settings. An invalid body gets 400 `{ "error": "invalid_settings" }` and leaves the saved settings unchanged.

@@ -84,10 +84,7 @@ const applyResult = async ({
 	const { store, github, settingsStore, logger, now } = job.dependencies;
 	const tracked = store.getPullRequest(job.tracked.id) ?? job.tracked;
 	const live = await github.getPullRequest(tracked);
-	const currentSettings = settingsStore.get();
-	const settings = isRecovered
-		? { ...currentSettings, reviewMode: 'manual' as const }
-		: currentSettings;
+	const settings = settingsStore.get();
 	const action = decidePostingAction({
 		result,
 		jobHeadSha,

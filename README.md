@@ -29,8 +29,8 @@ comes back if it crashes, and opens it. Click the icon in the menu bar. If somet
 not logged in, the proxy plugin not installed, `gh` not logged in) the window lists it with the
 exact command that fixes it.
 
-It starts in **manual mode**: nothing is reviewed until you click **Review**, and nothing is posted
-until you post it.
+It starts with **Start reviews: Manually** and **Post reviews: Ask me first**: nothing is reviewed
+until you click **Review**, and nothing is posted until you post it.
 
 ## What it's like to use
 
@@ -57,18 +57,21 @@ drop the ones you don't want, jump to the line on GitHub, then post.
 **History** shows how each PR ended over the last 30 days: approved by the bot, approved, merged,
 closed, reviewed by you, or stopped.
 
-In **Settings** you can switch to **auto mode**, where comment reviews post on their own; choose
-whether approvals post on their own too (never, always, or only for small PRs); limit which orgs and
-repos it watches; and set the round limit and how often it checks.
+In **Settings**, **Start reviews** decides who starts a review (you, or the bot as soon as you're
+requested) and **Post reviews** decides what happens when it's done (a draft for you, or posted
+automatically). When reviews post automatically, **Auto-approve** decides whether approvals post on
+their own too (never, always, or only for small PRs); otherwise they still wait for your click. You
+can also limit which orgs and repos it watches, and set the round limit and how often it checks.
 
 ## What it will and won't do
 
-- **In manual mode nothing posts without you.** Every finished review is a draft first.
-- **Approvals wait for your click** unless you turn auto-approve on, and before approving it checks
-  the PR head hasn't moved since the review.
+- **With Post reviews on Ask me first, nothing posts without you.** Every finished review is a draft
+  first.
+- **Approvals wait for your click** unless reviews post automatically and you turn auto-approve on,
+  and before approving it checks the PR head hasn't moved since the review.
 - **Claude can read, never write.** Reviews run with read-only tools, and the `gh` and `git` that
   Claude sees are guards that block every write. Only the bot itself posts, after you've seen the
-  draft (or in auto mode).
+  draft (or when reviews post automatically).
 - **A PR's own files can't run code.** The guards start outside the checked-out repo and ignore its
   `.env`, `bunfig.toml` and `BUN_OPTIONS`.
 - **It steps back when you step in.** If you review a PR yourself, the bot stops on it.
@@ -77,7 +80,7 @@ repos it watches; and set the round limit and how often it checks.
 - **Reviews bill your Claude subscription.** `ANTHROPIC_API_KEY` is removed from every run.
 - **A review that finishes without a usable answer isn't thrown away.** The bot resumes that same
   Claude session and asks for the result (up to 5 tries) instead of reviewing again, and anything
-  recovered this way is always held as a draft for you.
+  recovered this way follows your Post reviews setting like any other review.
 
 ## How it works underneath
 

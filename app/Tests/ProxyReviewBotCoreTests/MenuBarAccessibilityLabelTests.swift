@@ -43,6 +43,7 @@ final class MenuBarAccessibilityLabelTests: XCTestCase {
             readiness: readiness,
             settings: BotSettings(
                 reviewMode: .manual,
+                postReviews: .ask,
                 autoApprove: .off,
                 smallPullRequestLineLimit: 50,
                 maxRounds: 5,

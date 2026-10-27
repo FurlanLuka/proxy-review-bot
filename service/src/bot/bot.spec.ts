@@ -14,10 +14,15 @@ import { createTestHarness, expectNoLeakedWorktrees, VIEWER_LOGIN } from '../tes
 import type { TestHarness } from '../test-support/fakes.js';
 import { createBot } from './bot.js';
 
+// Leaves postReviews out so it follows reviewMode unless a test sets it.
+const DEFAULTS_WITH_DERIVED_POSTING = Object.fromEntries(
+	Object.entries(DEFAULT_SETTINGS).filter(([key]) => key !== 'postReviews'),
+);
+
 const setUp = (settings = {}) => {
 	const harness = createTestHarness();
 
-	harness.dependencies.settingsStore.replace({ ...DEFAULT_SETTINGS, ...settings });
+	harness.dependencies.settingsStore.replace({ ...DEFAULTS_WITH_DERIVED_POSTING, ...settings });
 
 	const bot = createBot(harness.dependencies);
 
@@ -2325,7 +2330,8 @@ describe('repairing a review that returned no structured result', () => {
 
 		expect(setup.claude.reviewCalls).toHaveLength(1);
 		expect(setup.claude.repairCalls).toHaveLength(MAX_REPAIR_ATTEMPTS + 1);
-		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+		expect(setup.github.submissions.map((submission) => submission.event)).toEqual(['COMMENT']);
+		expect(setup.statusOf(7)?.status).toBe('waiting_on_author');
 	});
 
 	it('the session is saved as soon as the wrong-shape result arrives, before the first repair', async () => {
@@ -2435,7 +2441,7 @@ describe('repairing a review that returned no structured result', () => {
 		expect(storedRepairFields(setup, id)).toEqual({ sessionId: null, headSha: null });
 	});
 
-	it('auto mode: a repaired result is held as a draft, not posted', async () => {
+	it('auto mode, auto-approve off: a repaired approving result waits for your approval, like any other', async () => {
 		const setup = setUp({ reviewMode: 'auto' });
 
 		setup.github.addPullRequest(7);
@@ -2444,10 +2450,10 @@ describe('repairing a review that returned no structured result', () => {
 		await setup.tickAndSettle();
 
 		expect(setup.github.submissions).toEqual([]);
-		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+		expect(setup.statusOf(7)?.status).toBe('awaiting_approval');
 	});
 
-	it('auto mode with auto-approve on: a repaired approving result is held as a draft, nothing posted', async () => {
+	it('auto mode with auto-approve on: a repaired approving result is approved on its own', async () => {
 		const setup = setUp({ reviewMode: 'auto', autoApprove: 'on' });
 
 		setup.github.addPullRequest(7);
@@ -2455,19 +2461,19 @@ describe('repairing a review that returned no structured result', () => {
 		setup.claude.repairOutcomes.push(draftedFor('head-1', 'approve'));
 		await setup.tickAndSettle();
 
-		expect(setup.github.submissions).toEqual([]);
-		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+		expect(setup.github.submissions.map((submission) => submission.event)).toEqual(['APPROVE']);
+		expect(setup.statusOf(7)?.status).toBe('done');
 	});
 
-	it('auto mode: a result recovered from the text fallback is held as a draft, not posted', async () => {
+	it('auto mode: a result recovered from the text fallback posts on its own, like any other', async () => {
 		const setup = setUp({ reviewMode: 'auto' });
 
 		setup.github.addPullRequest(7);
 		setup.claude.reviewOutcomes.push({ ...draftedFor('head-1', 'comment'), isRecovered: true });
 		await setup.tickAndSettle();
 
-		expect(setup.github.submissions).toEqual([]);
-		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+		expect(setup.github.submissions.map((submission) => submission.event)).toEqual(['COMMENT']);
+		expect(setup.statusOf(7)?.status).toBe('waiting_on_author');
 	});
 
 	it('a failure with no session to resume (e.g. a timeout) → no repair attempted', async () => {
@@ -2739,7 +2745,66 @@ describe('manual-mode draft edge cases', () => {
 		expect(setup.statusOf(7)?.status).toBe('waiting_on_author');
 	});
 
-	it('a review started in auto mode is held as a draft if you switch to manual before it finishes', async () => {
+	it('you start reviews, they post on their own: a comment review posts once you click Review', async () => {
+		const setup = setUp({ reviewMode: 'manual', postReviews: 'auto' });
+
+		setup.github.addPullRequest(7);
+		await setup.tickAndSettle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(0);
+
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.bot.requestReview(setup.statusOf(7)?.id ?? 0);
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.github.submissions.map((submission) => submission.event)).toEqual(['COMMENT']);
+		expect(setup.statusOf(7)?.status).toBe('waiting_on_author');
+	});
+
+	it('a draft held under Ask me first stays held after switching Post reviews to Automatically', async () => {
+		const setup = setUp({ reviewMode: 'auto', postReviews: 'ask' });
+
+		setup.github.addPullRequest(7);
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.tickAndSettle();
+
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+
+		setup.dependencies.settingsStore.replace({
+			...setup.dependencies.settingsStore.get(),
+			postReviews: 'auto',
+		});
+		await setup.tickAndSettle();
+
+		expect(setup.github.submissions).toEqual([]);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+	});
+
+	it('reviews start on their own, you post each draft: the result is held', async () => {
+		const setup = setUp({ reviewMode: 'auto', postReviews: 'ask' });
+
+		setup.github.addPullRequest(7);
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.tickAndSettle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.github.submissions).toEqual([]);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+	});
+
+	it('Post reviews on Ask me first: a recovered result is held like any other', async () => {
+		const setup = setUp({ reviewMode: 'auto', postReviews: 'ask' });
+
+		setup.github.addPullRequest(7);
+		setup.claude.reviewOutcomes.push({ ...draftedFor('head-1', 'comment'), isRecovered: true });
+		await setup.tickAndSettle();
+
+		expect(setup.github.submissions).toEqual([]);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+	});
+
+	it('a review started while posting automatically is held as a draft if you switch Post reviews to Ask me first before it finishes', async () => {
 		const setup = setUp({ reviewMode: 'auto' });
 		const gate = createGate();
 
@@ -2750,7 +2815,7 @@ describe('manual-mode draft edge cases', () => {
 		await setup.claude.waitForReviewCall(1);
 		setup.dependencies.settingsStore.replace({
 			...setup.dependencies.settingsStore.get(),
-			reviewMode: 'manual',
+			postReviews: 'ask',
 		});
 		gate.open();
 		await setup.settle();

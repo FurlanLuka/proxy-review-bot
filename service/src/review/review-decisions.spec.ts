@@ -239,12 +239,39 @@ const decidePosting = (overrides: Partial<Parameters<typeof decidePostingAction>
 		jobHeadSha: 'head-1',
 		jobBaseRefName: 'main',
 		live: { headSha: 'head-1', baseRefName: 'main', state: 'open' },
-		settings: { autoApprove: 'off', smallPullRequestLineLimit: 100, reviewMode: 'auto' },
+		settings: { autoApprove: 'off', smallPullRequestLineLimit: 100, postReviews: 'auto' },
 		changedLines: 50,
 		isOwn: false,
 		...overrides,
 	});
 };
+
+describe('decidePostingAction by Post reviews and Auto-approve', () => {
+	const approve = makeDraft({ filing: 'approve' });
+	const comment = makeDraft({ filing: 'comment' });
+
+	it.each([
+		['ask', 'off', comment, 50, 'hold_draft'],
+		['ask', 'on', approve, 50, 'hold_draft'],
+		['auto', 'off', comment, 50, 'post COMMENT'],
+		['auto', 'off', approve, 50, 'await_approval'],
+		['auto', 'on', approve, 50, 'post APPROVE'],
+		['auto', 'small', approve, 99, 'post APPROVE'],
+		['auto', 'small', approve, 100, 'await_approval'],
+	] as const)(
+		'Post reviews %s, Auto-approve %s, %o filing, %i changed lines → %s',
+		(postReviews, autoApprove, result, changedLines, expected) => {
+			const action = decidePosting({
+				result,
+				changedLines,
+				settings: { autoApprove, smallPullRequestLineLimit: 100, postReviews },
+			});
+			const label = action.kind === 'post' ? `post ${action.event}` : action.kind;
+
+			expect(label).toBe(expected);
+		},
+	);
+});
 
 describe('isViewerRequested', () => {
 	it('viewer among requested reviewers, any case → true; absent → false', () => {
@@ -299,29 +326,29 @@ describe('isOwnPullRequest', () => {
 describe('decidePostingAction on your own PR', () => {
 	const approveDraft = makeDraft({ filing: 'approve' });
 
-	it('auto mode with auto-approve on and an approve filing → posts COMMENT', () => {
+	it('posting automatically with auto-approve on and an approve filing → posts COMMENT', () => {
 		expect(
 			decidePosting({
 				result: approveDraft,
 				isOwn: true,
-				settings: { autoApprove: 'on', smallPullRequestLineLimit: 100, reviewMode: 'auto' },
+				settings: { autoApprove: 'on', smallPullRequestLineLimit: 100, postReviews: 'auto' },
 			}),
 		).toMatchObject({ kind: 'post', event: 'COMMENT', draft: { filing: 'comment' } });
 	});
 
-	it('auto mode with auto-approve off and an approve filing → posts COMMENT, never waits to approve', () => {
+	it('posting automatically with auto-approve off and an approve filing → posts COMMENT, never waits to approve', () => {
 		expect(decidePosting({ result: approveDraft, isOwn: true })).toMatchObject({
 			kind: 'post',
 			event: 'COMMENT',
 		});
 	});
 
-	it('manual mode and an approve filing → the held draft is a comment', () => {
+	it('Post reviews on Ask me first and an approve filing → the held draft is a comment', () => {
 		expect(
 			decidePosting({
 				result: approveDraft,
 				isOwn: true,
-				settings: { autoApprove: 'off', smallPullRequestLineLimit: 100, reviewMode: 'manual' },
+				settings: { autoApprove: 'off', smallPullRequestLineLimit: 100, postReviews: 'ask' },
 			}),
 		).toMatchObject({ kind: 'hold_draft', draft: { filing: 'comment' } });
 	});
@@ -335,7 +362,7 @@ describe('decidePostingAction', () => {
 	it('auto-approve on + comment filing → still COMMENT, never approves', () => {
 		expect(
 			decidePosting({
-				settings: { autoApprove: 'on', smallPullRequestLineLimit: 100, reviewMode: 'auto' },
+				settings: { autoApprove: 'on', smallPullRequestLineLimit: 100, postReviews: 'auto' },
 			}),
 		).toMatchObject({ kind: 'post', event: 'COMMENT' });
 	});
@@ -350,7 +377,7 @@ describe('decidePostingAction', () => {
 		const settings = {
 			autoApprove: 'small',
 			smallPullRequestLineLimit: 100,
-			reviewMode: 'auto',
+			postReviews: 'auto',
 		} as const;
 		const result = makeDraft({ filing: 'approve' });
 
@@ -386,11 +413,11 @@ describe('decidePostingAction', () => {
 		});
 	});
 
-	it('manual mode → hold the draft for the developer, for comment and approve filings', () => {
+	it('Post reviews on Ask me first → hold the draft for the developer, for comment and approve filings', () => {
 		const settings = {
 			autoApprove: 'on',
 			smallPullRequestLineLimit: 100,
-			reviewMode: 'manual',
+			postReviews: 'ask',
 		} as const;
 		const commentDraft = makeDraft();
 		const approveDraft = makeDraft({ filing: 'approve' });
@@ -405,11 +432,11 @@ describe('decidePostingAction', () => {
 		});
 	});
 
-	it('manual mode still records nothing new and discards a moved head', () => {
+	it('Post reviews on Ask me first still records nothing new and discards a moved head', () => {
 		const settings = {
 			autoApprove: 'off',
 			smallPullRequestLineLimit: 100,
-			reviewMode: 'manual',
+			postReviews: 'ask',
 		} as const;
 
 		expect(

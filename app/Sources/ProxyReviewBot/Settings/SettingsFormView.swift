@@ -33,19 +33,27 @@ struct SettingsFormView: View {
             }
 
             Section("Reviews") {
-                Picker("Mode", selection: $settings.reviewMode) {
-                    Text("Manual").tag(ReviewMode.manual)
-                    Text("Auto").tag(ReviewMode.auto)
+                Picker("Start reviews", selection: $settings.reviewMode) {
+                    Text("Manually").tag(ReviewMode.manual)
+                    Text("Automatically").tag(ReviewMode.auto)
                 }
                 .pickerStyle(.segmented)
 
-                Picker("Auto-approve", selection: $settings.autoApprove) {
-                    Text("Off").tag(AutoApproveMode.off)
-                    Text("On").tag(AutoApproveMode.on)
-                    Text("Small PRs only").tag(AutoApproveMode.small)
+                Picker("Post reviews", selection: $settings.postReviews) {
+                    Text("Ask me first").tag(PostReviewsMode.ask)
+                    Text("Automatically").tag(PostReviewsMode.auto)
+                }
+                .pickerStyle(.segmented)
+
+                if settings.postReviews == .auto {
+                    Picker("Auto-approve", selection: $settings.autoApprove) {
+                        Text("Off").tag(AutoApproveMode.off)
+                        Text("On").tag(AutoApproveMode.on)
+                        Text("Small PRs only").tag(AutoApproveMode.small)
+                    }
                 }
 
-                if settings.autoApprove == .small {
+                if settings.postReviews == .auto && settings.autoApprove == .small {
                     LabeledContent("Small PR limit") {
                         HStack(spacing: 6) {
                             TextField("Small PR limit", value: $settings.smallPullRequestLineLimit, format: .number)

@@ -89,6 +89,18 @@ describe('api', () => {
 		expect(dependencies.settingsStore.get().reviewMode).toBe('auto');
 	});
 
+	it('PUT /settings without postReviews → derived from the mode and saved', async () => {
+		const { call, dependencies } = setUp();
+		const body = Object.fromEntries(
+			Object.entries({ ...DEFAULT_SETTINGS, reviewMode: 'auto' }).filter(
+				([key]) => key !== 'postReviews',
+			),
+		);
+
+		expect((await call('PUT', '/settings', body)).status).toBe(200);
+		expect(dependencies.settingsStore.get().postReviews).toBe('auto');
+	});
+
 	it('actions: unknown PR → 404; approve when not awaiting → 409', async () => {
 		const { call, github, bot } = setUp();
 

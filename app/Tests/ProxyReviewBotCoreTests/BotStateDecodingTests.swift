@@ -15,6 +15,7 @@ final class BotStateDecodingTests: XCTestCase {
         },
         "settings": {
             "reviewMode": "manual",
+            "postReviews": "auto",
             "autoApprove": "off",
             "smallPullRequestLineLimit": 200,
             "maxRounds": 5,
@@ -73,6 +74,7 @@ final class BotStateDecodingTests: XCTestCase {
 
         XCTAssertEqual(state.readiness.status, .ready)
         XCTAssertEqual(state.settings.reviewMode, .manual)
+        XCTAssertEqual(state.settings.postReviews, .auto)
         XCTAssertEqual(state.settings.toolPaths, ToolPaths())
         XCTAssertEqual(state.pullRequests.first?.status, .awaitingApproval)
         XCTAssertEqual(state.pullRequests.first?.shortName, "api #412")

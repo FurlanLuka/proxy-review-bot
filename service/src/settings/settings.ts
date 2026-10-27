@@ -7,6 +7,7 @@ const TOOL_PATH_SCHEMA = z.string().min(1).nullable().default(null);
 export const SETTINGS_SCHEMA = z
 	.object({
 		reviewMode: z.enum(['manual', 'auto']).default('manual'),
+		postReviews: z.enum(['ask', 'auto']).optional(),
 		autoApprove: z.enum(['off', 'on', 'small']).default('off'),
 		smallPullRequestLineLimit: z.number().int().min(1).max(100_000).default(200),
 		maxRounds: z.number().int().min(1).max(20).default(5),
@@ -18,7 +19,13 @@ export const SETTINGS_SCHEMA = z
 			.object({ claude: TOOL_PATH_SCHEMA, gh: TOOL_PATH_SCHEMA, git: TOOL_PATH_SCHEMA })
 			.default({}),
 	})
-	.strict();
+	.strict()
+	.transform((settings) => ({
+		...settings,
+		postReviews:
+			settings.postReviews ??
+			(settings.reviewMode === 'auto' ? ('auto' as const) : ('ask' as const)),
+	}));
 
 export type Settings = z.infer<typeof SETTINGS_SCHEMA>;
 

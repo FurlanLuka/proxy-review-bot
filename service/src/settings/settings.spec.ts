@@ -19,6 +19,44 @@ describe('settings', () => {
 		});
 	});
 
+	it('defaults: Post reviews is Ask me first', () => {
+		expect(DEFAULT_SETTINGS.postReviews).toBe('ask');
+	});
+
+	it.each([
+		['manual', 'ask'],
+		['auto', 'auto'],
+	] as const)(
+		'an older settings file in %s mode, without Post reviews → %s',
+		(reviewMode, expected) => {
+			const path = settingsPath();
+
+			writeFileSync(path, JSON.stringify({ reviewMode }));
+
+			expect(createSettingsStore(path).get()).toMatchObject({ reviewMode, postReviews: expected });
+		},
+	);
+
+	it('an explicit Post reviews value is kept, even when it differs from the mode', () => {
+		const path = settingsPath();
+		const store = createSettingsStore(path);
+
+		store.replace({ ...DEFAULT_SETTINGS, reviewMode: 'manual', postReviews: 'auto' });
+
+		expect(createSettingsStore(path).get()).toMatchObject({
+			reviewMode: 'manual',
+			postReviews: 'auto',
+		});
+	});
+
+	it('an invalid Post reviews value → defaults', () => {
+		const path = settingsPath();
+
+		writeFileSync(path, JSON.stringify({ reviewMode: 'auto', postReviews: 'sometimes' }));
+
+		expect(createSettingsStore(path).get()).toEqual(DEFAULT_SETTINGS);
+	});
+
 	it('missing file → defaults', () => {
 		expect(createSettingsStore(settingsPath()).get()).toEqual(DEFAULT_SETTINGS);
 	});

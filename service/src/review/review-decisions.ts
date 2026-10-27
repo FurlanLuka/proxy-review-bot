@@ -192,7 +192,7 @@ interface DecidePostingActionParams {
 	jobHeadSha: string;
 	jobBaseRefName: string;
 	live: Pick<LivePullRequest, 'headSha' | 'baseRefName' | 'state'>;
-	settings: Pick<Settings, 'autoApprove' | 'smallPullRequestLineLimit' | 'reviewMode'>;
+	settings: Pick<Settings, 'autoApprove' | 'smallPullRequestLineLimit' | 'postReviews'>;
 	changedLines: number;
 	isOwn: boolean;
 }
@@ -242,7 +242,7 @@ export const decidePostingAction = ({
 	// GitHub only accepts comment reviews from a PR's own author.
 	const draft = isOwn ? { ...result, filing: 'comment' as const } : result;
 
-	if (settings.reviewMode === 'manual') {
+	if (settings.postReviews === 'ask') {
 		return { kind: 'hold_draft', draft };
 	}
 
