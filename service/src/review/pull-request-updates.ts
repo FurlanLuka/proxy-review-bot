@@ -3,6 +3,13 @@ import type { PullRequestUpdate, TrackedPullRequest } from '../tracking/tracking
 import type { PostingAction, PullRequestAction } from './review-decisions.js';
 import { RETRY_BACKOFF_MS } from './review-decisions.js';
 
+export const firstQueuedAtFor = (
+	tracked: Pick<TrackedPullRequest, 'firstQueuedAt'>,
+	now: number,
+): number => {
+	return tracked.firstQueuedAt ?? now;
+};
+
 export const buildReviewCycleReset = (now: number): PullRequestUpdate => ({
 	rounds: 0,
 	attemptsForHead: 0,
@@ -39,13 +46,21 @@ export const buildActionUpdate = (
 				lastError: 'You reviewed this PR yourself',
 			};
 		case 'reopen':
-			return { ...buildReviewCycleReset(now), status: 'needs_review' };
+			return {
+				...buildReviewCycleReset(now),
+				status: 'needs_review',
+				firstQueuedAt: tracked.status === 'stopped' ? null : tracked.firstQueuedAt,
+			};
 		case 'give_up':
 			return { status: 'needs_you', pendingApproval: null, lastError: action.reason };
 		case 'clear_approval':
 			return { status: 'waiting_on_author', pendingApproval: null };
 		case 'enqueue':
-			return { status: 'queued', pendingApproval: null };
+			return {
+				status: 'queued',
+				pendingApproval: null,
+				firstQueuedAt: firstQueuedAtFor(tracked, now),
+			};
 		case 'mark_needs_review':
 			return {
 				status: 'needs_review',
@@ -134,6 +149,7 @@ export const buildPostingUpdate = ({
 				...reviewed,
 				status: action.event === 'APPROVE' ? 'done' : 'waiting_on_author',
 				rounds: tracked.rounds + 1,
+				isRequested: false,
 				lastSummary: action.summary,
 			};
 	}

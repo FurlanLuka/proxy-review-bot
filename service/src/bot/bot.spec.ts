@@ -154,7 +154,7 @@ describe('bot in auto mode', () => {
 		expect(setup.github.submissions[0]?.body).toContain('**src/retry.ts:12**');
 	});
 
-	it('manual mode: a failed review shows no retry time and returns to Ready to review after the backoff', async () => {
+	it('manual mode, started review: a failed run shows its retry time and is retried after the backoff', async () => {
 		const setup = setUp({ reviewMode: 'manual' });
 
 		setup.github.addPullRequest(7);
@@ -166,14 +166,293 @@ describe('bot in auto mode', () => {
 		expect(setup.statusOf(7)).toMatchObject({
 			status: 'waiting_on_author',
 			reason: 'Claude run timed out',
-			retryAt: null,
+			retryAt: setup.clock.now + 10 * 60_000,
+			isStarted: true,
 		});
 
 		setup.clock.now += 11 * 60_000;
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
 		await setup.tickAndSettle();
 
-		expect(setup.statusOf(7)?.status).toBe('needs_review');
-		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+		expect(setup.github.submissions).toEqual([]);
+	});
+
+	it('manual mode, started review: the author re-requests you on the same commit → a new round, held as a draft', async () => {
+		const setup = setUp({ reviewMode: 'manual' });
+		const entry = setup.github.addPullRequest(7);
+
+		await setup.tickAndSettle();
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.bot.requestReview(setup.statusOf(7)?.id ?? 0);
+		await setup.settle();
+
+		const posted = await setup.bot.postDraft(setup.statusOf(7)?.id ?? 0, {
+			headSha: 'head-1',
+			event: 'COMMENT',
+			mainReview: 'Please add a backoff',
+			comments: [],
+			fileComments: [],
+		});
+
+		expect(posted.result).toBe('ok');
+
+		await setup.tickAndSettle();
+
+		expect(setup.statusOf(7)).toMatchObject({ status: 'waiting_on_author', rounds: 1 });
+
+		entry.isRequested = true;
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.tickAndSettle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+		expect(setup.statusOf(7)).toMatchObject({ status: 'draft_ready', rounds: 1, isStarted: true });
+		expect(setup.github.submissions).toHaveLength(1);
+	});
+
+	describe('re-request detection', () => {
+		const startAndPost = async (setup: ReturnType<typeof setUp>) => {
+			await setup.tickAndSettle();
+			setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+			setup.bot.requestReview(setup.statusOf(7)?.id ?? 0);
+			await setup.settle();
+
+			const id = setup.statusOf(7)?.id ?? 0;
+			const posted = await setup.bot.postDraft(id, {
+				headSha: 'head-1',
+				event: 'COMMENT',
+				mainReview: 'Please add a backoff',
+				comments: [],
+				fileComments: [],
+			});
+
+			expect(posted.result).toBe('ok');
+			expect(setup.dependencies.store.getPullRequest(id)?.isRequested).toBe(false);
+
+			return id;
+		};
+
+		it('a started PR still requested, toggled to draft and back during its backoff → no extra round', async () => {
+			const setup = setUp({ reviewMode: 'manual' });
+			const entry = setup.github.addPullRequest(7);
+
+			await setup.tickAndSettle();
+			setup.claude.reviewOutcomes.push({ kind: 'failed', summary: 'Claude run timed out' });
+			setup.bot.requestReview(setup.statusOf(7)?.id ?? 0);
+			await setup.settle();
+
+			const retryAt = setup.statusOf(7)?.retryAt;
+
+			expect(entry.isRequested).toBe(true);
+			expect(setup.statusOf(7)).toMatchObject({
+				status: 'waiting_on_author',
+				reason: 'Claude run timed out',
+			});
+			expect(retryAt).not.toBeNull();
+
+			entry.live.isDraft = true;
+			await setup.tickAndSettle();
+			entry.live.isDraft = false;
+			await setup.tickAndSettle();
+
+			expect(setup.claude.reviewCalls).toHaveLength(1);
+			expect(setup.statusOf(7)).toMatchObject({ status: 'waiting_on_author', retryAt });
+
+			setup.clock.now += 11 * 60_000;
+			setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+			await setup.tickAndSettle();
+
+			expect(setup.claude.reviewCalls).toHaveLength(2);
+			expect(setup.statusOf(7)?.status).toBe('draft_ready');
+		});
+
+		it('finished PR whose repo is gone (404) → request cleared, no repeated fetches', async () => {
+			const setup = setUp({ reviewMode: 'manual' });
+			const entry = setup.github.addPullRequest(7);
+
+			await setup.tickAndSettle();
+			entry.live.state = 'closed';
+			entry.live.isMerged = true;
+			await setup.tickAndSettle();
+			setup.github.pullRequests.delete(7);
+			await setup.tickAndSettle();
+
+			const fetchesBefore = setup.github.pullRequestFetches.length;
+
+			await setup.tickAndSettle();
+			await setup.tickAndSettle();
+
+			expect(setup.statusOf(7)?.status).toBe('done');
+			expect(setup.github.pullRequestFetches.length).toBe(fetchesBefore);
+		});
+
+		it('merged while still requested → request cleared once, no GitHub fetch on later ticks', async () => {
+			const setup = setUp({ reviewMode: 'manual' });
+			const entry = setup.github.addPullRequest(7);
+
+			await setup.tickAndSettle();
+			entry.live.state = 'closed';
+			entry.live.isMerged = true;
+			await setup.tickAndSettle();
+			await setup.tickAndSettle();
+
+			expect(setup.statusOf(7)?.status).toBe('done');
+
+			const fetchesBefore = setup.github.pullRequestFetches.length;
+
+			await setup.tickAndSettle();
+			await setup.tickAndSettle();
+
+			expect(setup.github.pullRequestFetches.length).toBe(fetchesBefore);
+		});
+
+		it('gave up while still requested, toggled to draft and back → no reopen, no new review', async () => {
+			const setup = setUp({ reviewMode: 'manual' });
+			const entry = setup.github.addPullRequest(7);
+
+			await setup.tickAndSettle();
+			setup.claude.reviewOutcomes.push({ kind: 'failed', summary: 'Claude run timed out' });
+			setup.bot.requestReview(setup.statusOf(7)?.id ?? 0);
+			await setup.settle();
+			setup.clock.now += 11 * 60_000;
+			setup.claude.reviewOutcomes.push({ kind: 'failed', summary: 'Claude run timed out' });
+			await setup.tickAndSettle();
+			await setup.tickAndSettle();
+
+			expect(setup.statusOf(7)?.status).toBe('needs_you');
+			expect(entry.isRequested).toBe(true);
+
+			entry.live.isDraft = true;
+			await setup.tickAndSettle();
+			entry.live.isDraft = false;
+			await setup.tickAndSettle();
+
+			expect(setup.claude.reviewCalls).toHaveLength(2);
+			expect(setup.statusOf(7)?.status).toBe('needs_you');
+		});
+
+		it('gave up while still requested, GitHub errors during the draft tick → request kept, no reopen', async () => {
+			const setup = setUp({ reviewMode: 'manual' });
+			const entry = setup.github.addPullRequest(7);
+
+			await setup.tickAndSettle();
+			setup.claude.reviewOutcomes.push({ kind: 'failed', summary: 'Claude run timed out' });
+			setup.bot.requestReview(setup.statusOf(7)?.id ?? 0);
+			await setup.settle();
+			setup.clock.now += 11 * 60_000;
+			setup.claude.reviewOutcomes.push({ kind: 'failed', summary: 'Claude run timed out' });
+			await setup.tickAndSettle();
+			await setup.tickAndSettle();
+			entry.live.isDraft = true;
+			setup.github.failPullRequestFetchesWith.push(500);
+			await setup.tickAndSettle();
+
+			expect(setup.github.failPullRequestFetchesWith).toEqual([]);
+			expect(setup.dependencies.store.getPullRequest(setup.statusOf(7)?.id ?? 0)?.isRequested).toBe(
+				true,
+			);
+
+			entry.live.isDraft = false;
+			await setup.tickAndSettle();
+
+			expect(setup.claude.reviewCalls).toHaveLength(2);
+			expect(setup.statusOf(7)?.status).toBe('needs_you');
+		});
+
+		it('re-requested while a round is running → absorbed by that round, draft held, no extra round', async () => {
+			const setup = setUp({ reviewMode: 'manual' });
+			const entry = setup.github.addPullRequest(7);
+			const id = await startAndPost(setup);
+			const gate = createGate();
+
+			pushCommit(setup, 7, 'head-2');
+			await setup.tickAndSettle();
+			setup.clock.now += QUIET_PERIOD_MS;
+			setup.claude.reviewGate = gate.promise;
+			setup.claude.reviewOutcomes.push(draftedFor('head-2', 'comment'));
+			await setup.bot.tick();
+			await setup.claude.waitForReviewCall(2);
+			entry.isRequested = true;
+			await setup.bot.tick();
+			gate.open();
+			await setup.settle();
+			await setup.tickAndSettle();
+
+			expect(setup.claude.reviewCalls).toHaveLength(2);
+			expect(setup.statusOf(7)?.status).toBe('draft_ready');
+			expect(setup.dependencies.store.getPullRequest(id)?.isRequested).toBe(true);
+		});
+
+		it('re-requested while search still lags behind → seen from the PR itself, new round', async () => {
+			const setup = setUp({ reviewMode: 'manual' });
+			const entry = setup.github.addPullRequest(7);
+
+			await startAndPost(setup);
+			entry.isRequested = true;
+			entry.isHiddenFromSearch = true;
+			setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+			await setup.tickAndSettle();
+
+			expect(setup.claude.reviewCalls).toHaveLength(2);
+			expect(setup.statusOf(7)?.status).toBe('draft_ready');
+		});
+
+		it('re-requested while paused → acted on after resuming, not lost', async () => {
+			const setup = setUp({ reviewMode: 'manual' });
+			const entry = setup.github.addPullRequest(7);
+			const id = await startAndPost(setup);
+
+			setup.bot.setPaused(true);
+			entry.isRequested = true;
+			await setup.tickAndSettle();
+
+			expect(setup.claude.reviewCalls).toHaveLength(1);
+			expect(setup.dependencies.store.getPullRequest(id)?.isRequested).toBe(false);
+
+			setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+			setup.bot.setPaused(false);
+			await setup.tickAndSettle();
+
+			expect(setup.claude.reviewCalls).toHaveLength(2);
+			expect(setup.statusOf(7)?.status).toBe('draft_ready');
+		});
+
+		it('new commits while a draft is held → the old draft is dropped, a fresh round runs, nothing posted', async () => {
+			const setup = setUp({ reviewMode: 'manual' });
+
+			setup.github.addPullRequest(7);
+			await setup.tickAndSettle();
+			setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+			setup.bot.requestReview(setup.statusOf(7)?.id ?? 0);
+			await setup.settle();
+
+			expect(setup.statusOf(7)?.status).toBe('draft_ready');
+
+			pushCommit(setup, 7, 'head-2');
+			await setup.tickAndSettle();
+			setup.clock.now += QUIET_PERIOD_MS;
+			setup.claude.reviewOutcomes.push(draftedFor('head-2', 'comment'));
+			await setup.tickAndSettle();
+
+			expect(setup.claude.reviewCalls).toHaveLength(2);
+			expect(setup.statusOf(7)?.status).toBe('draft_ready');
+			expect(setup.bot.getDraft(setup.statusOf(7)?.id ?? 0)).toMatchObject({ headSha: 'head-2' });
+			expect(setup.github.submissions).toEqual([]);
+		});
+	});
+
+	it('manual mode, review never started: new commits still wait in Ready to review', async () => {
+		const setup = setUp({ reviewMode: 'manual' });
+
+		setup.github.addPullRequest(7);
+		await setup.tickAndSettle();
+		pushCommit(setup, 7, 'head-2');
+		setup.clock.now += QUIET_PERIOD_MS;
+		await setup.tickAndSettle();
+
+		expect(setup.statusOf(7)).toMatchObject({ status: 'needs_review', isStarted: false });
+		expect(setup.claude.reviewCalls).toHaveLength(0);
 	});
 
 	it('Review again on a failed round runs now and keeps the round count', async () => {
@@ -1769,9 +2048,12 @@ describe('manual-mode drafts', () => {
 		expect(setup.github.submissions).toEqual([]);
 
 		setup.clock.now += QUIET_PERIOD_MS;
+		setup.claude.reviewOutcomes.push(draftedFor('head-2', 'comment'));
 		await setup.tickAndSettle();
 
-		expect(setup.statusOf(7)?.status).toBe('needs_review');
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+		expect(setup.github.submissions).toEqual([]);
 	});
 
 	it('a push while the draft waits clears it on the next tick', async () => {

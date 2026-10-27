@@ -51,6 +51,10 @@ const MIGRATIONS = [
 	)`,
 	'CREATE INDEX activity_pull_request ON activity (pull_request_id)',
 	'CREATE TABLE runtime_flags (name TEXT PRIMARY KEY, value TEXT NOT NULL)',
+	'ALTER TABLE tracked_pull_requests ADD COLUMN first_queued_at INTEGER',
+	`UPDATE tracked_pull_requests SET first_queued_at = tracked_since
+		WHERE rounds > 0
+			OR status IN ('queued', 'reviewing', 'waiting_on_author', 'awaiting_approval', 'draft_ready', 'blocked')`,
 ];
 
 const COLUMN_NAMES: Record<keyof PullRequestUpdate, string> = {
@@ -73,6 +77,7 @@ const COLUMN_NAMES: Record<keyof PullRequestUpdate, string> = {
 	lastSummary: 'last_summary',
 	lastError: 'last_error',
 	reviewStartedAt: 'review_started_at',
+	firstQueuedAt: 'first_queued_at',
 	trackedSince: 'tracked_since',
 	updatedAt: 'updated_at',
 };
@@ -101,6 +106,7 @@ interface PullRequestRow {
 	last_summary: string | null;
 	last_error: string | null;
 	review_started_at: number | null;
+	first_queued_at: number | null;
 	tracked_since: number;
 	updated_at: number;
 }
@@ -132,6 +138,7 @@ const toTrackedPullRequest = (row: PullRequestRow): TrackedPullRequest => ({
 	lastSummary: row.last_summary,
 	lastError: row.last_error,
 	reviewStartedAt: row.review_started_at,
+	firstQueuedAt: row.first_queued_at,
 	trackedSince: row.tracked_since,
 	updatedAt: row.updated_at,
 });

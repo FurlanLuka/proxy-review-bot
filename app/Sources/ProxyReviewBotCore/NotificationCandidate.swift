@@ -19,6 +19,18 @@ struct NotificationCandidate: Equatable, Sendable {
         "pr-\(pullRequest.id)-\(pullRequest.status.rawValue)-\(pullRequest.headSha)"
     }
 
+    static func draftPullRequestID(fromKey key: String) -> Int? {
+        let parts = key.split(separator: "-", maxSplits: 3).map(String.init)
+
+        guard parts.count >= 3, parts[0] == "pr", let id = Int(parts[1]),
+              let status = PullRequestStatus(rawValue: parts[2]), status.hasDraft
+        else {
+            return nil
+        }
+
+        return id
+    }
+
     private static func candidate(for pullRequest: PullRequest) -> NotificationCandidate? {
         switch pullRequest.status {
         case .awaitingApproval:

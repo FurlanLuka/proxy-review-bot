@@ -61,7 +61,8 @@ final class BotStateDecodingTests: XCTestCase {
                 "summary": null,
                 "reason": null,
                 "reviewStartedAt": null,
-                "updatedAt": 1793015179000
+                "updatedAt": 1793015179000,
+                "isStarted": true
             }
         ]
     }
@@ -82,6 +83,13 @@ final class BotStateDecodingTests: XCTestCase {
         let state = try JSONDecoder().decode(BotState.self, from: Data(stateJSON.utf8))
 
         XCTAssertEqual(state.pullRequests.last?.status, .unknown)
+    }
+
+    func testIsStartedDecodesWhenPresentAndDefaultsToNotStarted() throws {
+        let state = try JSONDecoder().decode(BotState.self, from: Data(stateJSON.utf8))
+
+        XCTAssertNil(state.pullRequests.first?.isStarted)
+        XCTAssertEqual(state.pullRequests.last?.isStarted, true)
     }
 
     func testToolPathsEncodeNullsExplicitly() throws {

@@ -22,8 +22,15 @@ enum SnapshotRenderer {
             }
 
             try? await Task.sleep(for: .seconds(1))
-            await render(MenuContentView(model: model), name: "menu", into: directory)
-            await render(SettingsView(model: model), name: "settings", into: directory)
+            let size = MainWindowController.defaultSize
+            await render(
+                HomeView(model: model)
+                    .environmentObject(AppNavigator())
+                    .frame(width: size.width, height: size.height),
+                name: "menu",
+                into: directory
+            )
+            await render(SettingsView(model: model).frame(width: size.width, height: size.height), name: "settings", into: directory)
 
             if let state = model.state {
                 await render(
@@ -35,7 +42,8 @@ enum SnapshotRenderer {
             }
             await render(
                 PullRequestRowView(model: model, pullRequest: sampleReviewingPullRequest(), isProgressExpanded: true)
-                    .padding(12).frame(width: 400),
+                    .environmentObject(AppNavigator())
+                    .padding(12).frame(width: size.width - HomeView.padding * 2),
                 name: "progress",
                 into: directory
             )
@@ -54,13 +62,13 @@ enum SnapshotRenderer {
                     onDiscard: {},
                     onFinish: {}
                 )
-                .frame(width: DraftEditorWindow.defaultSize.width, height: DraftEditorWindow.defaultSize.height),
+                .frame(width: size.width, height: size.height),
                 name: "draft",
                 into: directory
             )
             await render(
                 HistoryContentView(entries: sampleHistory(), now: Date())
-                    .frame(width: HistoryWindow.defaultSize.width, height: HistoryWindow.defaultSize.height),
+                    .frame(width: size.width, height: size.height),
                 name: "history",
                 into: directory
             )

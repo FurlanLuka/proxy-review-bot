@@ -9,8 +9,8 @@ final class MenuBarAccessibilityLabelTests: XCTestCase {
     func testRunningStateCountsWhatNeedsYou() {
         let state = makeState()
 
-        XCTAssertEqual(MenuBarAccessibilityLabel.text(for: state, attentionCount: 3), "Proxy Review Bot, 3 need you")
-        XCTAssertEqual(MenuBarAccessibilityLabel.text(for: state, attentionCount: 1), "Proxy Review Bot, 1 needs you")
+        XCTAssertEqual(MenuBarAccessibilityLabel.text(for: state, attentionCount: 3), "Proxy Review Bot, 3 PRs need your action")
+        XCTAssertEqual(MenuBarAccessibilityLabel.text(for: state, attentionCount: 1), "Proxy Review Bot, 1 PR needs your action")
     }
 
     func testPausedStateSaysPaused() {
@@ -22,7 +22,7 @@ final class MenuBarAccessibilityLabelTests: XCTestCase {
     func testSetupNeededWinsOverUsageLimit() {
         let state = makeState(usageLimitedUntil: 1_793_015_179_000, readiness: Fixtures.setupNeededReadiness)
 
-        XCTAssertEqual(MenuBarAccessibilityLabel.text(for: state, attentionCount: 2), "Proxy Review Bot, setup needed, 2 need you")
+        XCTAssertEqual(MenuBarAccessibilityLabel.text(for: state, attentionCount: 2), "Proxy Review Bot, setup needed, 2 PRs need your action")
     }
 
     func testUsageLimitIsNamed() {
@@ -54,5 +54,13 @@ final class MenuBarAccessibilityLabelTests: XCTestCase {
             ),
             pullRequests: []
         )
+    }
+
+    func testToolTipExplainsWhatTheCountMeans() {
+        XCTAssertEqual(
+            MenuBarAccessibilityLabel.toolTip(for: nil, attentionCount: 2),
+            "Proxy Review Bot · 2 PRs need your action: waiting for you or ready to review"
+        )
+        XCTAssertEqual(MenuBarAccessibilityLabel.toolTip(for: nil, attentionCount: 0), "Proxy Review Bot · Nothing needs your action")
     }
 }

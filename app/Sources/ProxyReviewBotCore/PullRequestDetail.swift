@@ -3,14 +3,16 @@ import Foundation
 public enum PullRequestDetail {
     public static func text(for pullRequest: PullRequest, now: Date) -> String {
         switch pullRequest.status {
+        case .needsReview where pullRequest.isReviewStarted:
+            return ReviewStep.upNext.label
         case .needsReview:
             return pullRequest.author.map { "Requested by @\($0)" } ?? "Waiting for your go-ahead"
         case .awaitingApproval:
-            return pullRequest.summary.map { "Ready to approve: \($0)" } ?? "Ready to approve"
+            return waitingForYou(pullRequest.summary.map { "Ready to approve: \($0)" } ?? "Ready to approve")
         case .draftReady:
-            return draftReadyText(for: pullRequest.draft)
+            return waitingForYou(draftReadyText(for: pullRequest.draft))
         case .needsYou:
-            return pullRequest.reason ?? "Needs you"
+            return waitingForYou(pullRequest.reason ?? "Needs you")
         case .queued:
             return "Queued"
         case .reviewing:
@@ -34,7 +36,18 @@ public enum PullRequestDetail {
     }
 
     public static func roundText(for pullRequest: PullRequest) -> String {
-        "Round \(pullRequest.rounds) of \(pullRequest.maxRounds)"
+        "Round \(currentRound(of: pullRequest)) of \(pullRequest.maxRounds)"
+    }
+
+    private static func currentRound(of pullRequest: PullRequest) -> Int {
+        let isRoundInProgress = switch pullRequest.status {
+        case .queued, .reviewing, .needsReview, .draftReady, .awaitingApproval:
+            true
+        default:
+            pullRequest.hasFailedReview
+        }
+
+        return isRoundInProgress ? min(pullRequest.rounds + 1, pullRequest.maxRounds) : max(pullRequest.rounds, 1)
     }
 
     public static func lineCountText(for pullRequest: PullRequest) -> String {
@@ -63,20 +76,27 @@ public enum PullRequestDetail {
 
     private static func waitingOnAuthorText(for pullRequest: PullRequest, now: Date) -> String {
         if let reason = pullRequest.reason, pullRequest.hasFailedReview {
-            let retryText = pullRequest.retryAtDate.map { retryAt in
-                let minutes = max(1, Int(ceil(retryAt.timeIntervalSince(now) / 60)))
-
-                return retryAt > now ? "tries again in \(minutes) min" : "tries again soon"
+            guard let retryAt = pullRequest.retryAtDate else {
+                return waitingForYou("Review failed: \(reason)")
             }
 
-            return ["Review failed: \(reason)", retryText].compactMap { $0 }.joined(separator: " · ")
+            let minutes = max(1, Int(ceil(retryAt.timeIntervalSince(now) / 60)))
+            let retryText = retryAt > now ? "retrying in \(minutes) min" : "retrying soon"
+
+            return "\(ReviewStep.upNext.label) · \(retryText) · last try failed: \(reason)"
         }
+
+        let label = ReviewStep.waitingOnAuthor.label
 
         if pullRequest.rounds == 0 {
-            return "Nothing posted · reviews again when the author pushes"
+            return "\(label) · nothing posted yet"
         }
 
-        return pullRequest.summary.map { "Waiting on author · \($0)" } ?? "Waiting on author"
+        return pullRequest.summary.map { "\(label) · \($0)" } ?? label
+    }
+
+    private static func waitingForYou(_ detail: String) -> String {
+        "\(ReviewStep.waitingForYou.label) · \(detail)"
     }
 
     private static func reviewingText(startedAt: Date?, now: Date) -> String {

@@ -1,8 +1,6 @@
 import SwiftUI
 
 enum MenuStyle {
-    static let width: CGFloat = 400
-    static let outerPadding: CGFloat = 12
     static let cardSpacing: CGFloat = 6
     static let cardCornerRadius: CGFloat = 12
     static let bannerCornerRadius: CGFloat = 12

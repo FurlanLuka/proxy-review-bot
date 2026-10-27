@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 import { ANCHOR_TIME, makeDraft, makeLive, makeTracked } from '../test-support/factories.js';
 import {
+	isDecisionDeferred,
+	isViewerRequested,
 	decideApprovalAction,
 	decidePostingAction,
 	decidePullRequestAction,
@@ -28,6 +30,58 @@ const decide = (overrides: Partial<Parameters<typeof decidePullRequestAction>[0]
 describe('decidePullRequestAction', () => {
 	it('new PR in auto mode → enqueue', () => {
 		expect(decide()).toEqual({ kind: 'enqueue' });
+	});
+
+	it('manual mode, review already started: new commits and elapsed backoff enqueue, never needs review', () => {
+		const started = { firstQueuedAt: ANCHOR_TIME - 3 * 60 * 60_000 };
+
+		expect(
+			decide({
+				settings: MANUAL,
+				tracked: makeTracked({
+					...started,
+					status: 'waiting_on_author',
+					lastReviewedHead: 'head-0',
+				}),
+			}),
+		).toEqual({ kind: 'enqueue' });
+		expect(
+			decide({
+				settings: MANUAL,
+				tracked: makeTracked({
+					...started,
+					status: 'waiting_on_author',
+					lastError: 'timed out',
+					nextEligibleAt: ANCHOR_TIME - 1,
+				}),
+			}),
+		).toEqual({ kind: 'enqueue' });
+	});
+
+	it('started review re-requested on the same commit → a new round; at the round limit → give up', () => {
+		const reRequested = {
+			status: 'waiting_on_author' as const,
+			firstQueuedAt: 1,
+			isRequested: false,
+			lastReviewedHead: 'head-1',
+			rounds: 1,
+		};
+
+		expect(decide({ settings: MANUAL, tracked: makeTracked(reRequested) })).toEqual({
+			kind: 'enqueue',
+		});
+		expect(
+			decide({ settings: MANUAL, tracked: makeTracked({ ...reRequested, status: 'blocked' }) }),
+		).toEqual({ kind: 'enqueue' });
+		expect(
+			decide({ settings: MANUAL, tracked: makeTracked({ ...reRequested, rounds: 5 }) }),
+		).toEqual({ kind: 'give_up', reason: 'Gave up after 5 rounds' });
+		expect(
+			decide({
+				settings: MANUAL,
+				tracked: makeTracked({ ...reRequested, firstQueuedAt: null }),
+			}),
+		).toEqual({ kind: 'none' });
 	});
 
 	it('new PR in manual mode → mark needs review, then nothing once marked', () => {
@@ -189,6 +243,44 @@ const decidePosting = (overrides: Partial<Parameters<typeof decidePostingAction>
 		...overrides,
 	});
 };
+
+describe('isViewerRequested', () => {
+	it('viewer among requested reviewers, any case → true; absent → false', () => {
+		const live = makeLive({ requestedReviewerLogins: ['Luka', 'ana'] });
+
+		expect(isViewerRequested({ live, viewerLogin: 'luka' })).toBe(true);
+		expect(isViewerRequested({ live: makeLive(), viewerLogin: 'luka' })).toBe(false);
+	});
+});
+
+describe('isDecisionDeferred', () => {
+	it('paused, running or draft → deferred; closed or finished → never deferred', () => {
+		const live = makeLive();
+
+		expect(isDecisionDeferred({ tracked: makeTracked(), live, isPaused: true })).toBe(true);
+		expect(
+			isDecisionDeferred({ tracked: makeTracked({ status: 'reviewing' }), live, isPaused: false }),
+		).toBe(true);
+		expect(
+			isDecisionDeferred({
+				tracked: makeTracked(),
+				live: makeLive({ isDraft: true }),
+				isPaused: false,
+			}),
+		).toBe(true);
+		expect(isDecisionDeferred({ tracked: makeTracked(), live, isPaused: false })).toBe(false);
+		expect(
+			isDecisionDeferred({
+				tracked: makeTracked(),
+				live: makeLive({ state: 'closed' }),
+				isPaused: true,
+			}),
+		).toBe(false);
+		expect(
+			isDecisionDeferred({ tracked: makeTracked({ status: 'done' }), live, isPaused: true }),
+		).toBe(false);
+	});
+});
 
 describe('decidePostingAction', () => {
 	it('comment filing → post COMMENT', () => {

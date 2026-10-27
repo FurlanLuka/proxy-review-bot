@@ -1,6 +1,7 @@
 import type { Readiness } from '../readiness/readiness.js';
 import type { ReviewProgress } from '../review/review-progress.js';
 import type { Settings } from '../settings/settings.js';
+import { isReviewStarted } from '../review/review-decisions.js';
 import { DRAFT_HOLDING_STATUSES } from '../tracking/tracking-types.js';
 import type { TrackedPullRequest } from '../tracking/tracking-types.js';
 
@@ -23,6 +24,7 @@ export interface PullRequestView {
 	summary: string | null;
 	reason: string | null;
 	retryAt: number | null;
+	isStarted: boolean;
 	reviewStartedAt: number | null;
 	updatedAt: number;
 	progress: ReviewProgress | null;
@@ -65,11 +67,12 @@ const toView = (
 	summary: tracked.lastSummary,
 	reason: tracked.lastError,
 	retryAt:
-		settings.reviewMode === 'auto' &&
+		(settings.reviewMode === 'auto' || isReviewStarted(tracked)) &&
 		tracked.status === 'waiting_on_author' &&
 		tracked.lastError !== null
 			? tracked.nextEligibleAt
 			: null,
+	isStarted: isReviewStarted(tracked),
 	reviewStartedAt: tracked.reviewStartedAt,
 	updatedAt: tracked.updatedAt,
 	progress,

@@ -38,6 +38,17 @@ describe('recorded gh fixtures', () => {
 		expect(live.baseRefName).toBe('trunk');
 		expect(live.state).toBe('closed');
 		expect(live.isMerged).toBe(true);
+		expect(live.requestedReviewerLogins).toEqual([]);
+	});
+
+	it('pull request with requested reviewers → their logins', () => {
+		const live = parsePullRequest({
+			json: { ...pullRequestFixture, requested_reviewers: [{ login: 'Luka' }, { login: 'ana' }] },
+			owner: 'cli',
+			repo: 'cli',
+		});
+
+		expect(live.requestedReviewerLogins).toEqual(['Luka', 'ana']);
 	});
 
 	it('slurped review pages → flat list with author type', () => {

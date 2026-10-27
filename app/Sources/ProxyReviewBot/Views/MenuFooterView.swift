@@ -3,8 +3,7 @@ import SwiftUI
 
 struct MenuFooterView: View {
     @ObservedObject var model: BotModel
-    @Environment(\.openSettings) private var openSettings
-    @Environment(\.openWindow) private var openWindow
+    @EnvironmentObject private var navigator: AppNavigator
 
     var body: some View {
         HStack(spacing: 2) {
@@ -19,14 +18,11 @@ struct MenuFooterView: View {
             }
 
             IconButton(systemName: "gearshape", label: "Settings", help: "Settings (⌘,)") {
-                NSApp.activate()
-                openSettings()
+                navigator.open(.settings)
             }
-            .keyboardShortcut(",")
 
             IconButton(systemName: "clock.arrow.circlepath", label: "History", help: "History") {
-                NSApp.activate()
-                openWindow(id: HistoryWindow.id, value: HistoryWindow.value)
+                navigator.open(.history)
             }
 
             IconButton(systemName: "doc.plaintext", label: "Open Logs", help: "Open Logs") {

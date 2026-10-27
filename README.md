@@ -7,6 +7,14 @@ A local macOS menu bar bot that reviews GitHub pull requests where you are perso
 
 ![Menu](docs/screenshots/final/dark/menu.png)
 
+## What changed in 0.4.0
+
+- Once you start a review, the PR stays in In review until it's done. New commits, a re-request (even on the same commit) and a failed run after its backoff start the next round on their own, also in manual mode. You still check and post every draft.
+- Updating marks PRs that were already in progress as started, so they continue on their own.
+- A re-request skips the quiet period.
+- Switching from auto to manual mode keeps already-started PRs continuing.
+- The menu bar icon opens a window instead of a dropdown. Drafts, History and Settings open inside it with Back.
+
 ## Requirements
 
 - macOS 14 or later.

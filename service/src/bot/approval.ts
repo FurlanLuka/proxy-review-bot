@@ -102,6 +102,7 @@ const postHeldDraft = async ({
 			store.updatePullRequest(id, {
 				status: choice.event === 'APPROVE' ? 'done' : 'waiting_on_author',
 				rounds: tracked.rounds + 1,
+				isRequested: false,
 				pendingApproval: null,
 				lastSummary: choice.draft.summary,
 				updatedAt: now(),

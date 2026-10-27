@@ -2,7 +2,7 @@ import type { LivePullRequest } from '../github/github-types.js';
 import type { MyReviewState } from '../github/github-parsers.js';
 import type { Settings } from '../settings/settings.js';
 import { DRAFT_HOLDING_STATUSES, TERMINAL_STATUSES } from '../tracking/tracking-types.js';
-import type { TrackedPullRequest } from '../tracking/tracking-types.js';
+import type { PullRequestStatus, TrackedPullRequest } from '../tracking/tracking-types.js';
 import type { DraftedReviewResult, ReviewResult } from './review-result.js';
 
 export const QUIET_PERIOD_MS = 5 * 60_000;
@@ -39,9 +39,52 @@ interface DecidePullRequestActionParams {
 
 const NONE: PullRequestAction = { kind: 'none' };
 
-const isInFlight = (tracked: TrackedPullRequest): boolean => {
+const RE_REQUESTABLE_STATUSES: ReadonlySet<PullRequestStatus> = new Set([
+	'waiting_on_author',
+	'blocked',
+]);
+
+const isInFlight = (tracked: Pick<TrackedPullRequest, 'status'>): boolean => {
 	return tracked.status === 'queued' || tracked.status === 'reviewing';
 };
+
+export const isReviewStarted = (tracked: TrackedPullRequest): boolean => {
+	return tracked.firstQueuedAt !== null;
+};
+
+interface IsViewerRequestedParams {
+	live: Pick<LivePullRequest, 'requestedReviewerLogins'>;
+	viewerLogin: string;
+}
+
+export const isViewerRequested = ({ live, viewerLogin }: IsViewerRequestedParams): boolean => {
+	const viewer = viewerLogin.toLowerCase();
+
+	return live.requestedReviewerLogins.some((login) => login.toLowerCase() === viewer);
+};
+
+interface IsDecisionDeferredParams {
+	tracked: Pick<TrackedPullRequest, 'status'>;
+	live: Pick<LivePullRequest, 'state' | 'isDraft'>;
+	isPaused: boolean;
+}
+
+export const isDecisionDeferred = ({
+	tracked,
+	live,
+	isPaused,
+}: IsDecisionDeferredParams): boolean => {
+	if (live.state === 'closed' || TERMINAL_STATUSES.has(tracked.status)) {
+		return false;
+	}
+
+	return isInFlight(tracked) || isPaused || live.isDraft;
+};
+
+const giveUpAfterRounds = (rounds: number): PullRequestAction => ({
+	kind: 'give_up',
+	reason: `Gave up after ${rounds} rounds`,
+});
 
 export const decidePullRequestAction = ({
 	tracked,
@@ -71,8 +114,16 @@ export const decidePullRequestAction = ({
 		return { kind: 'take_over' };
 	}
 
-	if (isInFlight(tracked) || isPaused || live.isDraft) {
+	if (isDecisionDeferred({ tracked, live, isPaused })) {
 		return NONE;
+	}
+
+	const isReRequested = isRequestedNow && !tracked.isRequested;
+
+	if (isReviewStarted(tracked) && isReRequested && RE_REQUESTABLE_STATUSES.has(tracked.status)) {
+		return tracked.rounds >= settings.maxRounds
+			? giveUpAfterRounds(tracked.rounds)
+			: { kind: 'enqueue' };
 	}
 
 	const head = live.headSha;
@@ -101,7 +152,7 @@ export const decidePullRequestAction = ({
 	}
 
 	if (tracked.rounds >= settings.maxRounds) {
-		return { kind: 'give_up', reason: `Gave up after ${tracked.rounds} rounds` };
+		return giveUpAfterRounds(tracked.rounds);
 	}
 
 	const isReReview = tracked.lastReviewedHead !== null;
@@ -111,7 +162,7 @@ export const decidePullRequestAction = ({
 		return NONE;
 	}
 
-	if (settings.reviewMode === 'auto') {
+	if (settings.reviewMode === 'auto' || isReviewStarted(tracked)) {
 		return { kind: 'enqueue' };
 	}
 

@@ -15,18 +15,22 @@ const posting = (action: Parameters<typeof buildPostingUpdate>[0]['action']) => 
 };
 
 describe('buildPostingUpdate', () => {
-	it('posted COMMENT → waiting on author, round +1, head reviewed', () => {
+	it('posted COMMENT → waiting on author, round +1, head reviewed, request cleared', () => {
 		expect(posting({ kind: 'posted', event: 'COMMENT', summary: 'S' })).toMatchObject({
 			status: 'waiting_on_author',
 			rounds: 3,
 			lastReviewedHead: 'head-1',
 			lastSummary: 'S',
 			attemptsForHead: 0,
+			isRequested: false,
 		});
 	});
 
-	it('posted APPROVE → done', () => {
-		expect(posting({ kind: 'posted', event: 'APPROVE', summary: 'S' }).status).toBe('done');
+	it('posted APPROVE → done, request cleared', () => {
+		expect(posting({ kind: 'posted', event: 'APPROVE', summary: 'S' })).toMatchObject({
+			status: 'done',
+			isRequested: false,
+		});
 	});
 
 	it('await approval → stores the draft, rounds unchanged', () => {
@@ -64,8 +68,27 @@ describe('buildActionUpdate', () => {
 		expect(buildActionUpdate({ kind: 'reopen' }, tracked, ANCHOR_TIME)).toEqual({
 			...buildReviewCycleReset(ANCHOR_TIME),
 			status: 'needs_review',
+			firstQueuedAt: tracked.firstQueuedAt,
 		});
 		expect(buildReviewCycleReset(ANCHOR_TIME).trackedSince).toBe(ANCHOR_TIME);
+	});
+
+	it('reopen keeps a started review started, unless you had stopped it', () => {
+		const gaveUp = makeTracked({ status: 'needs_you', firstQueuedAt: 5 });
+		const stopped = makeTracked({ status: 'stopped', firstQueuedAt: 5 });
+
+		expect(buildActionUpdate({ kind: 'reopen' }, gaveUp, ANCHOR_TIME)?.firstQueuedAt).toBe(5);
+		expect(buildActionUpdate({ kind: 'reopen' }, stopped, ANCHOR_TIME)?.firstQueuedAt).toBeNull();
+	});
+
+	it('enqueue marks the review started the first time only', () => {
+		expect(buildActionUpdate({ kind: 'enqueue' }, makeTracked(), ANCHOR_TIME)?.firstQueuedAt).toBe(
+			ANCHOR_TIME,
+		);
+		expect(
+			buildActionUpdate({ kind: 'enqueue' }, makeTracked({ firstQueuedAt: 5 }), ANCHOR_TIME)
+				?.firstQueuedAt,
+		).toBe(5);
 	});
 
 	it('mark needs review keeps the last error only after a failed attempt', () => {

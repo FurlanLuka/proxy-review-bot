@@ -100,26 +100,48 @@ struct DraftEditorContentView: View {
                     .foregroundStyle(Palette.rose.ink)
             }
 
-            HStack(spacing: 8) {
-                Button(role: .destructive) {
-                    isConfirmingDiscard = true
-                } label: {
-                    Label("Discard…", systemImage: "trash")
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    discardButton
+
+                    Spacer()
+
+                    eventPicker
+
+                    postButton
                 }
-                .buttonStyle(PillButtonStyle())
 
-                Spacer()
+                VStack(alignment: .trailing, spacing: 8) {
+                    eventPicker
 
-                PillSegmentedPicker(
-                    label: "Post as",
-                    options: editableDraft.availableEvents.map { ($0, $0.title) },
-                    selection: $editableDraft.event,
-                    tint: eventTint
-                )
+                    HStack(spacing: 8) {
+                        discardButton
 
-                postButton
+                        Spacer()
+
+                        postButton
+                    }
+                }
             }
         }
+    }
+
+    private var discardButton: some View {
+        Button(role: .destructive) {
+            isConfirmingDiscard = true
+        } label: {
+            Label("Discard…", systemImage: "trash")
+        }
+        .buttonStyle(PillButtonStyle())
+    }
+
+    private var eventPicker: some View {
+        PillSegmentedPicker(
+            label: "Post as",
+            options: editableDraft.availableEvents.map { ($0, $0.title) },
+            selection: $editableDraft.event,
+            tint: eventTint
+        )
     }
 
     @ViewBuilder

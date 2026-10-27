@@ -43,7 +43,7 @@ struct PullRequestRowView: View {
         .padding(12)
         .card()
         .accessibilityElement(children: .contain)
-        .stopActions(isAvailable: pullRequest.status.isStoppable) {
+        .stopActions(isAvailable: pullRequest.status.isStoppable, wording: stopWording) {
             isConfirmingStop = true
         }
         .disabled(isBusy)
@@ -51,7 +51,7 @@ struct PullRequestRowView: View {
 
     private var stopConfirmation: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Stop reviewing this PR? The bot picks it up again when someone re-requests your review.")
+            Text(stopWording.question)
                 .font(MenuStyle.metaFont)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -69,7 +69,7 @@ struct PullRequestRowView: View {
                     isConfirmingStop = false
                     model.stop(pullRequest)
                 } label: {
-                    Label("Stop Reviewing", systemImage: "stop.circle")
+                    Label(stopWording.confirmTitle, systemImage: stopWording.symbolName)
                 }
                 .buttonStyle(PillButtonStyle(isProminent: true, tint: Palette.rose))
             }
@@ -120,7 +120,7 @@ struct PullRequestRowView: View {
                     diffStat
                 }
 
-                if pullRequest.status.isInReview {
+                if pullRequest.showsRoundCount {
                     Text(PullRequestDetail.roundText(for: pullRequest))
                         .font(MenuStyle.metaFont.monospacedDigit())
                         .foregroundStyle(.secondary)
@@ -138,12 +138,16 @@ struct PullRequestRowView: View {
         Button(role: .destructive) {
             isConfirmingStop = true
         } label: {
-            Label("Stop", systemImage: "stop.circle")
+            Label(stopWording.buttonTitle, systemImage: stopWording.symbolName)
                 .labelStyle(isLabeled ? AnyLabelStyle(.titleAndIcon) : AnyLabelStyle(.iconOnly))
         }
         .buttonStyle(PillButtonStyle())
-        .help("Stop Reviewing This PR")
-        .accessibilityLabel("Stop Reviewing This PR")
+        .help(stopWording.actionLabel)
+        .accessibilityLabel(stopWording.actionLabel)
+    }
+
+    private var stopWording: StopWording {
+        StopWording(isReviewStarted: pullRequest.isReviewStarted)
     }
 
     private var diffStat: some View {
@@ -188,12 +192,12 @@ struct PullRequestRowView: View {
 
 private extension View {
     @ViewBuilder
-    func stopActions(isAvailable: Bool, stop: @escaping () -> Void) -> some View {
+    func stopActions(isAvailable: Bool, wording: StopWording, stop: @escaping () -> Void) -> some View {
         if isAvailable {
             contextMenu {
-                Button("Stop Reviewing…", role: .destructive, action: stop)
+                Button("\(wording.confirmTitle)…", role: .destructive, action: stop)
             }
-            .accessibilityAction(named: "Stop Reviewing", stop)
+            .accessibilityAction(named: wording.confirmTitle, stop)
         } else {
             self
         }

@@ -32,6 +32,7 @@ const PULL_REQUEST_SCHEMA = z.object({
 	user: z.object({ login: z.string() }),
 	head: z.object({ sha: z.string() }),
 	base: z.object({ ref: z.string() }),
+	requested_reviewers: z.array(z.object({ login: z.string() })).default([]),
 });
 
 const REVIEW_SCHEMA = z.object({
@@ -122,6 +123,7 @@ export const parsePullRequest = ({
 		isDraft: pullRequest.draft,
 		headSha: pullRequest.head.sha,
 		baseRefName: pullRequest.base.ref,
+		requestedReviewerLogins: pullRequest.requested_reviewers.map((reviewer) => reviewer.login),
 		additions: pullRequest.additions,
 		deletions: pullRequest.deletions,
 	};

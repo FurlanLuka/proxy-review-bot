@@ -18,7 +18,7 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(width: 520, height: 640)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear(perform: loadDraftIfNeeded)
         .onChange(of: model.state?.settings) { oldSettings, newSettings in
             if draft == nil || draft == oldSettings {

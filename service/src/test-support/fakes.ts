@@ -28,6 +28,7 @@ export const VIEWER_LOGIN = 'luka';
 interface FakePullRequest {
 	live: LivePullRequest;
 	isRequested: boolean;
+	isHiddenFromSearch?: boolean;
 	reviews: PullRequestReview[];
 	threads: ReviewThread[];
 }
@@ -38,6 +39,8 @@ export interface FakeGitHub extends GitHubClient {
 	fileComments: FileCommentSubmission[];
 	replies: { commentId: number; body: string }[];
 	failSubmissionsWith: number[];
+	failPullRequestFetchesWith: number[];
+	pullRequestFetches: number[];
 	addPullRequest(number: number, overrides?: Partial<LivePullRequest>): FakePullRequest;
 }
 
@@ -49,6 +52,8 @@ export const createFakeGitHub = (clock: { now: number }): FakeGitHub => {
 		fileComments: [],
 		replies: [],
 		failSubmissionsWith: [],
+		failPullRequestFetchesWith: [],
+		pullRequestFetches: [],
 		addPullRequest: (number, overrides = {}) => {
 			const entry = {
 				live: makeLive({ number, url: `https://github.com/acme/api/pull/${number}`, ...overrides }),
@@ -63,7 +68,13 @@ export const createFakeGitHub = (clock: { now: number }): FakeGitHub => {
 		},
 		searchRequestedPullRequests: async () => {
 			return [...pullRequests.values()]
-				.filter((entry) => entry.isRequested && entry.live.state === 'open')
+				.filter(
+					(entry) =>
+						entry.isRequested &&
+						!entry.isHiddenFromSearch &&
+						entry.live.state === 'open' &&
+						!entry.live.isDraft,
+				)
 				.map(
 					(entry): DiscoveredPullRequest => ({
 						owner: entry.live.owner,
@@ -78,11 +89,22 @@ export const createFakeGitHub = (clock: { now: number }): FakeGitHub => {
 		getPullRequest: async (reference) => {
 			const entry = pullRequests.get(reference.number);
 
+			fake.pullRequestFetches.push(reference.number);
+
+			const failureStatus = fake.failPullRequestFetchesWith.shift();
+
+			if (failureStatus !== undefined) {
+				throw new GitHubRequestError('fake failure', failureStatus);
+			}
+
 			if (entry === undefined) {
 				throw new GitHubRequestError('not found', 404);
 			}
 
-			return { ...entry.live };
+			return {
+				...entry.live,
+				requestedReviewerLogins: entry.isRequested ? [VIEWER_LOGIN] : [],
+			};
 		},
 		listReviews: async (reference) => [...(pullRequests.get(reference.number)?.reviews ?? [])],
 		listReviewThreads: async (reference) => pullRequests.get(reference.number)?.threads ?? [],

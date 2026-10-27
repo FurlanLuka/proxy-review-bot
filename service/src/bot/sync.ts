@@ -3,10 +3,16 @@ import {
 	isRepositoryIncluded,
 	parseMyReviewState,
 } from '../github/github-parsers.js';
+import { GitHubRequestError } from '../github/github-types.js';
 import type { PullRequestReview } from '../github/github-types.js';
 import { buildActionUpdate, buildLiveUpdate } from '../review/pull-request-updates.js';
-import { decidePullRequestAction } from '../review/review-decisions.js';
+import {
+	decidePullRequestAction,
+	isDecisionDeferred,
+	isViewerRequested,
+} from '../review/review-decisions.js';
 import { TERMINAL_STATUSES } from '../tracking/tracking-types.js';
+import type { TrackedPullRequest } from '../tracking/tracking-types.js';
 import type { BotDependencies } from './bot-context.js';
 
 interface SyncPullRequestsParams {
@@ -23,6 +29,37 @@ const reviewsSince = (reviews: PullRequestReview[], since: number): PullRequestR
 	return reviews.filter(
 		(review) => review.submittedAt !== null && Date.parse(review.submittedAt) >= since,
 	);
+};
+
+interface ClearRequestIfWithdrawnParams {
+	dependencies: BotDependencies;
+	tracked: TrackedPullRequest;
+	viewerLogin: string;
+}
+
+const clearRequestIfWithdrawn = async ({
+	dependencies,
+	tracked,
+	viewerLogin,
+}: ClearRequestIfWithdrawnParams): Promise<void> => {
+	const { store, github, logger } = dependencies;
+
+	try {
+		const live = await github.getPullRequest(tracked);
+
+		if (live.state === 'closed' || !isViewerRequested({ live, viewerLogin })) {
+			store.updatePullRequest(tracked.id, { isRequested: false });
+		}
+	} catch (error) {
+		if (error instanceof GitHubRequestError && error.status === 404) {
+			store.updatePullRequest(tracked.id, { isRequested: false });
+			logger.warn('pull_request_request_check_gone', { id: tracked.id });
+
+			return;
+		}
+
+		logger.error('pull_request_request_check_failed', { id: tracked.id, error });
+	}
 };
 
 export const syncPullRequests = async ({
@@ -57,13 +94,13 @@ export const syncPullRequests = async ({
 	}
 
 	for (const tracked of store.listPullRequests()) {
-		const isRequestedNow = requestedKeys.has(
+		const isInSearch = requestedKeys.has(
 			pullRequestKey(tracked.owner, tracked.repo, tracked.number),
 		);
 
-		if (TERMINAL_STATUSES.has(tracked.status) && !isRequestedNow) {
+		if (TERMINAL_STATUSES.has(tracked.status) && !isInSearch) {
 			if (tracked.isRequested) {
-				store.updatePullRequest(tracked.id, { isRequested: false });
+				await clearRequestIfWithdrawn({ dependencies, tracked, viewerLogin });
 			}
 
 			continue;
@@ -75,6 +112,7 @@ export const syncPullRequests = async ({
 				github.listReviews(tracked),
 			]);
 			const currentNow = now();
+			const isRequestedNow = isViewerRequested({ live, viewerLogin });
 			const recentReviews = reviewsSince(reviews, tracked.trackedSince);
 			const action = decidePullRequestAction({
 				tracked,
@@ -87,9 +125,16 @@ export const syncPullRequests = async ({
 				now: currentNow,
 			});
 			const actionUpdate = buildActionUpdate(action, tracked, currentNow);
+			const isRequestChangeDeferred =
+				action.kind === 'none' && isDecisionDeferred({ tracked, live, isPaused });
 
 			store.updatePullRequest(tracked.id, {
-				...buildLiveUpdate({ tracked, live, isRequestedNow, now: currentNow }),
+				...buildLiveUpdate({
+					tracked,
+					live,
+					isRequestedNow: isRequestChangeDeferred ? tracked.isRequested : isRequestedNow,
+					now: currentNow,
+				}),
 				...(actionUpdate !== null && { ...actionUpdate, updatedAt: currentNow }),
 			});
 

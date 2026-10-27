@@ -66,7 +66,7 @@ struct MenuHeaderView: View {
             return "Connecting…"
         }
 
-        return state.settings.reviewMode == .auto ? "Auto mode · reviews on its own" : "Manual mode · you start reviews"
+        return state.settings.reviewMode == .auto ? "Auto mode · reviews on its own" : "Manual mode · you start reviews, then approve each draft"
     }
 
     private var statusText: String {

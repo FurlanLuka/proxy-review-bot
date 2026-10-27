@@ -1,17 +1,28 @@
 public struct PullRequestSections: Equatable, Sendable {
-    public let needsReview: [PullRequest]
-    public let needsYou: [PullRequest]
+    public let readyToReview: [PullRequest]
     public let inReview: [PullRequest]
 
     public init(pullRequests: [PullRequest]) {
-        let waitingOnYou = pullRequests.filter(\.isWaitingOnYou)
+        readyToReview = pullRequests.filter(\.isReadyToReview)
+        inReview = pullRequests.enumerated()
+            .compactMap { offset, pullRequest in
+                pullRequest.reviewStep.map { (rank: Self.rank(of: pullRequest, step: $0), offset: offset, pullRequest: pullRequest) }
+            }
+            .sorted { ($0.rank, $0.offset) < ($1.rank, $1.offset) }
+            .map(\.pullRequest)
+    }
 
-        needsReview = pullRequests.filter { $0.status == .needsReview }
-        needsYou = waitingOnYou.filter { $0.status == .draftReady } + waitingOnYou.filter { $0.status != .draftReady }
-        inReview = pullRequests.filter(\.isInReview)
+    public var isEmpty: Bool {
+        readyToReview.isEmpty && inReview.isEmpty
     }
 
     public static func attentionCount(of pullRequests: [PullRequest]) -> Int {
-        pullRequests.filter { $0.isWaitingOnYou || $0.status == .needsReview }.count
+        pullRequests.filter { $0.isWaitingOnYou || $0.isReadyToReview }.count
+    }
+
+    private static func rank(of pullRequest: PullRequest, step: ReviewStep) -> Int {
+        let isDraftFirst = step == .waitingForYou && pullRequest.status == .draftReady
+
+        return step.rawValue * 2 + (isDraftFirst ? 0 : 1)
     }
 }

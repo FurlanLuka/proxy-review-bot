@@ -5,24 +5,34 @@ import XCTest
 final class WaitingOnAuthorDetailTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_793_015_000)
 
-    func testFailedReviewShowsTheReasonAndRetryTime() {
+    func testRetryingFailureIsUpNextWithTheRetryTimeAndReason() {
         var pullRequest = Fixtures.pullRequest(id: 1, status: .waitingOnAuthor)
         pullRequest.rounds = 0
         pullRequest.reason = "Claude run timed out"
         pullRequest.retryAt = (now.timeIntervalSince1970 + 9.5 * 60) * 1000
 
-        XCTAssertTrue(pullRequest.hasFailedReview)
+        XCTAssertTrue(pullRequest.isRetryingFailure)
+        XCTAssertEqual(pullRequest.reviewStep, .upNext)
         XCTAssertEqual(
             PullRequestDetail.text(for: pullRequest, now: now),
-            "Review failed: Claude run timed out · tries again in 10 min"
+            "Up next · retrying in 10 min · last try failed: Claude run timed out"
         )
 
         pullRequest.retryAt = (now.timeIntervalSince1970 - 60) * 1000
 
         XCTAssertEqual(
             PullRequestDetail.text(for: pullRequest, now: now),
-            "Review failed: Claude run timed out · tries again soon"
+            "Up next · retrying soon · last try failed: Claude run timed out"
         )
+    }
+
+    func testFailureThatWillNotRetryWaitsForYou() {
+        var pullRequest = Fixtures.pullRequest(id: 1, status: .waitingOnAuthor)
+        pullRequest.reason = "Claude run timed out"
+
+        XCTAssertFalse(pullRequest.isRetryingFailure)
+        XCTAssertEqual(pullRequest.reviewStep, .waitingForYou)
+        XCTAssertEqual(PullRequestDetail.text(for: pullRequest, now: now), "Waiting for you · Review failed: Claude run timed out")
     }
 
     func testReviewAgainKeepsRoundsForAFailedReviewButResetsAfterGivingUp() {
@@ -34,14 +44,14 @@ final class WaitingOnAuthorDetailTests: XCTestCase {
         XCTAssertNil(Fixtures.pullRequest(id: 3, status: .waitingOnAuthor).reviewAgainAction)
     }
 
-    func testNothingPostedYetIsNotCalledWaitingOnAuthor() {
+    func testNothingPostedYetSaysSoAfterTheStep() {
         var pullRequest = Fixtures.pullRequest(id: 1, status: .waitingOnAuthor)
         pullRequest.rounds = 0
 
         XCTAssertFalse(pullRequest.hasFailedReview)
         XCTAssertEqual(
             PullRequestDetail.text(for: pullRequest, now: now),
-            "Nothing posted · reviews again when the author pushes"
+            "Waiting on author · nothing posted yet"
         )
     }
 

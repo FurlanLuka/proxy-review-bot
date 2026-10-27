@@ -21,6 +21,7 @@ public struct PullRequest: Codable, Equatable, Identifiable, Sendable {
     public var updatedAt: Double
     public var progress: ReviewProgress?
     public var draft: PullRequestDraftSummary?
+    public var isStarted: Bool?
 
     public var shortName: String {
         "\(repo) #\(number)"
@@ -28,6 +29,10 @@ public struct PullRequest: Codable, Equatable, Identifiable, Sendable {
 
     public var hasFailedReview: Bool {
         status == .waitingOnAuthor && reason != nil
+    }
+
+    public var isRetryingFailure: Bool {
+        hasFailedReview && retryAt != nil
     }
 
     public var reviewAgainAction: ServiceAction? {
@@ -38,12 +43,43 @@ public struct PullRequest: Codable, Equatable, Identifiable, Sendable {
         return hasFailedReview ? .review(pullRequestID: id) : nil
     }
 
-    public var isWaitingOnYou: Bool {
-        status.isWaitingOnYou || hasFailedReview
+    public var isReviewStarted: Bool {
+        status != .needsReview || isStarted == true
     }
 
-    public var isInReview: Bool {
-        status.isInReview && !hasFailedReview
+    public var isReadyToReview: Bool {
+        status == .needsReview && !isReviewStarted
+    }
+
+    public var reviewStep: ReviewStep? {
+        if hasFailedReview {
+            return isRetryingFailure ? .upNext : .waitingForYou
+        }
+
+        switch status {
+        case .draftReady, .awaitingApproval, .needsYou:
+            return .waitingForYou
+        case .reviewing:
+            return .reviewing
+        case .queued:
+            return .queued
+        case .needsReview:
+            return isReviewStarted ? .upNext : nil
+        case .waitingOnAuthor:
+            return .waitingOnAuthor
+        case .blocked:
+            return .blocked
+        case .done, .stopped, .unknown:
+            return nil
+        }
+    }
+
+    public var isWaitingOnYou: Bool {
+        reviewStep == .waitingForYou
+    }
+
+    public var showsRoundCount: Bool {
+        reviewStep != nil
     }
 
     public var retryAtDate: Date? {

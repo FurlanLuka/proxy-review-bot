@@ -5,7 +5,7 @@ struct PullRequestActionsView: View {
     @ObservedObject var model: BotModel
     let pullRequest: PullRequest
     var isCompact = false
-    @Environment(\.openWindow) private var openWindow
+    @EnvironmentObject private var navigator: AppNavigator
 
     var body: some View {
         switch pullRequest.status {
@@ -13,7 +13,7 @@ struct PullRequestActionsView: View {
             Button {
                 model.review(pullRequest)
             } label: {
-                Label("Review", systemImage: "sparkles")
+                Label(pullRequest.isReviewStarted ? "Review Now" : "Review", systemImage: "sparkles")
             }
             .buttonStyle(PillButtonStyle(isProminent: true, tint: Palette.sky))
 
@@ -55,8 +55,7 @@ struct PullRequestActionsView: View {
 
     private func reviewDraftButton(isProminent: Bool) -> some View {
         Button {
-            NSApp.activate()
-            openWindow(id: DraftEditorWindow.id, value: pullRequest.id)
+            navigator.open(.draft(pullRequestID: pullRequest.id))
         } label: {
             Label("Review Draft…", systemImage: "doc.text.magnifyingglass")
         }

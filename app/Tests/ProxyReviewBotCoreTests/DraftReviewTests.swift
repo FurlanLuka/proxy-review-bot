@@ -109,12 +109,12 @@ final class DraftReviewTests: XCTestCase {
         )
         let now = Date()
 
-        XCTAssertEqual(PullRequestDetail.text(for: commentDraft, now: now), "Draft ready · 3 comments · will comment")
-        XCTAssertEqual(PullRequestDetail.text(for: approveDraft, now: now), "Draft ready · 1 comment · will approve")
-        XCTAssertEqual(PullRequestDetail.text(for: Fixtures.pullRequest(id: 3, status: .draftReady), now: now), "Draft ready")
+        XCTAssertEqual(PullRequestDetail.text(for: commentDraft, now: now), "Waiting for you · Draft ready · 3 comments · will comment")
+        XCTAssertEqual(PullRequestDetail.text(for: approveDraft, now: now), "Waiting for you · Draft ready · 1 comment · will approve")
+        XCTAssertEqual(PullRequestDetail.text(for: Fixtures.pullRequest(id: 3, status: .draftReady), now: now), "Waiting for you · Draft ready")
     }
 
-    func testDraftReadyComesFirstInNeedsYouAndCountsForAttention() {
+    func testDraftReadyComesFirstInInReviewAndCountsForAttention() {
         let pullRequests = [
             Fixtures.pullRequest(id: 1, status: .awaitingApproval),
             Fixtures.pullRequest(id: 2, status: .needsYou),
@@ -124,7 +124,7 @@ final class DraftReviewTests: XCTestCase {
 
         let sections = PullRequestSections(pullRequests: pullRequests)
 
-        XCTAssertEqual(sections.needsYou.map(\.id), [3, 1, 2])
+        XCTAssertEqual(sections.inReview.map(\.id), [3, 1, 2, 4])
         XCTAssertEqual(PullRequestSections.attentionCount(of: pullRequests), 3)
         XCTAssertTrue(PullRequestStatus.draftReady.isStoppable)
     }

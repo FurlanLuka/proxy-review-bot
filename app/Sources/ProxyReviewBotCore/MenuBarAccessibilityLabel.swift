@@ -7,6 +7,16 @@ public enum MenuBarAccessibilityLabel {
             .joined(separator: ", ")
     }
 
+    public static func toolTip(for state: BotState?, attentionCount: Int) -> String {
+        let countText = attentionCount == 0
+            ? "Nothing needs your action"
+            : "\(attentionText(for: attentionCount) ?? ""): waiting for you or ready to review"
+
+        return [appName, conditionText(for: state), countText]
+            .compactMap { $0 }
+            .joined(separator: " · ")
+    }
+
     private static func conditionText(for state: BotState?) -> String? {
         guard let state else {
             return nil
@@ -28,9 +38,9 @@ public enum MenuBarAccessibilityLabel {
         case 0:
             return nil
         case 1:
-            return "1 needs you"
+            return "1 PR needs your action"
         default:
-            return "\(attentionCount) need you"
+            return "\(attentionCount) PRs need your action"
         }
     }
 }

@@ -1,14 +1,7 @@
 import ProxyReviewBotCore
 import SwiftUI
 
-enum HistoryWindow {
-    static let id = "history"
-    static let value = "history"
-    static let minimumWidth: CGFloat = 520
-    static let defaultSize = CGSize(width: 560, height: 640)
-}
-
-struct HistoryWindowView: View {
+struct HistoryScreen: View {
     @ObservedObject var model: BotModel
 
     @State private var loadState = LoadState.loading
@@ -33,7 +26,7 @@ struct HistoryWindowView: View {
                 }
             }
         }
-        .frame(minWidth: HistoryWindow.minimumWidth, maxWidth: .infinity, minHeight: 360, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("History")
         .toolbar {
             ToolbarItem {

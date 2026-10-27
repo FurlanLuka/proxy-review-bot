@@ -16,16 +16,8 @@ public enum PullRequestStatus: String, Codable, Sendable {
         self = PullRequestStatus(rawValue: rawValue) ?? .unknown
     }
 
-    public var isWaitingOnYou: Bool {
-        self == .draftReady || self == .awaitingApproval || self == .needsYou
-    }
-
     public var hasDraft: Bool {
         self == .draftReady || self == .awaitingApproval
-    }
-
-    public var isInReview: Bool {
-        self == .queued || self == .reviewing || self == .waitingOnAuthor || self == .blocked
     }
 
     public var isStoppable: Bool {

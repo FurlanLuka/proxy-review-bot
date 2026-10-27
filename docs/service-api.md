@@ -55,6 +55,7 @@ Every request carries `Authorization: Bearer <PRB_TOKEN>`. A request without it 
 			"summary": "Retry logic sound, tests cover backoff",
 			"reason": null,
 			"retryAt": null,
+			"isStarted": true,
 			"reviewStartedAt": null,
 			"updatedAt": 1793015179000,
 			"progress": null
@@ -71,7 +72,8 @@ Every request carries `Authorization: Bearer <PRB_TOKEN>`. A request without it 
 - `draft`: on `draft_ready` and `awaiting_approval` rows, `{ "filing": "comment" | "approve", "summary": "…", "commentCount": 3 }`; otherwise null.
 - `summary`: the last one-line review summary.
 - `reason`: why the PR is `needs_you`, `blocked` or failed.
-- `retryAt`: in auto mode, epoch ms when a failed review is tried again, on a `waiting_on_author` row with a `reason`; otherwise null. In manual mode a failed review waits for you.
+- `retryAt`: epoch ms when a failed review is tried again, on a `waiting_on_author` row with a `reason`, in auto mode or once the review has started; otherwise null.
+- `isStarted`: true once the PR's first review was queued (you clicked Review or Retry, or auto mode queued it). A started PR keeps going on its own, even in manual mode: new commits (after the quiet period), a re-request from the author on the same commit, and a failed run after its backoff all queue the next round. Manual mode still holds each round as a draft for you. Re-requesting a stopped PR starts over as not started. A re-request is read from the PR's own `requested_reviewers` each sync, not from search, so toggling draft or a lagging search index doesn't count as one; a re-request seen while the bot is paused, running or the PR is a draft is acted on once that ends. A re-request skips the quiet period.
 - `reviewStartedAt`: epoch ms while the status is `reviewing`.
 - `progress`: live progress while a review or reply is running, otherwise null. It's kept in memory only:
 

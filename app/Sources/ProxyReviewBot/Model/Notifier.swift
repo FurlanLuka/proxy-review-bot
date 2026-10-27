@@ -51,8 +51,14 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
+        let path = AppRoute.path(forNoticeIdentifier: response.notification.request.identifier)
+
         DispatchQueue.main.async {
-            NSApp.activate()
+            NotificationCenter.default.post(
+                name: MainWindowController.showRequest,
+                object: nil,
+                userInfo: [MainWindowController.pathUserInfoKey: path]
+            )
             completionHandler()
         }
     }

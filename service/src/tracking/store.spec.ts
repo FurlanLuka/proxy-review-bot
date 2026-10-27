@@ -23,7 +23,56 @@ describe('store', () => {
 			version: number;
 		};
 
-		expect(version.version).toBe(6);
+		expect(version.version).toBe(8);
+	});
+
+	it('upgrading an existing database marks reviewed PRs as started and leaves new ones alone', () => {
+		const database = new Database(':memory:');
+
+		migrate(database);
+		database.run('DELETE FROM schema_migrations WHERE version > 6');
+		database.run('ALTER TABLE tracked_pull_requests DROP COLUMN first_queued_at');
+
+		const insert = (number: number, status: string, rounds: number) => {
+			database.run(
+				`INSERT INTO tracked_pull_requests (owner, repo, number, url, title, author, status, rounds, tracked_since, updated_at)
+				VALUES ('acme', 'api', ?, 'u', 't', 'a', ?, ?, 100, 100)`,
+				[number, status, rounds],
+			);
+		};
+
+		insert(1, 'needs_review', 0);
+		insert(2, 'waiting_on_author', 1);
+		insert(3, 'needs_review', 1);
+		insert(4, 'stopped', 0);
+		insert(5, 'done', 0);
+		insert(6, 'needs_you', 0);
+		insert(7, 'draft_ready', 0);
+		insert(8, 'queued', 0);
+		insert(9, 'reviewing', 0);
+		insert(10, 'awaiting_approval', 0);
+		insert(11, 'blocked', 0);
+		insert(12, 'done', 1);
+
+		const store = createStore(database);
+		const startedByNumber = Object.fromEntries(
+			store.listPullRequests().map((tracked) => [tracked.number, tracked.firstQueuedAt]),
+		);
+
+		expect(startedByNumber).toEqual({
+			1: null,
+			2: 100,
+			3: 100,
+			4: null,
+			5: null,
+			6: null,
+			7: 100,
+			8: 100,
+			9: 100,
+			10: 100,
+			11: 100,
+			12: 100,
+		});
 	});
 
 	it('pending approval and flags round-trip', () => {

@@ -1,6 +1,6 @@
 import { buildHistory } from '../history/history.js';
 import type { HistoryEntry } from '../history/history.js';
-import { buildReviewCycleReset } from '../review/pull-request-updates.js';
+import { buildReviewCycleReset, firstQueuedAtFor } from '../review/pull-request-updates.js';
 import type { ReviewProgress } from '../review/review-progress.js';
 import type { PullRequestUpdate, TrackedPullRequest } from '../tracking/tracking-types.js';
 import { approvePullRequest, discardDraft, findHeldDraft, postEditedDraft } from './approval.js';
@@ -263,7 +263,11 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 			return 'busy';
 		}
 
-		store.updatePullRequest(id, { ...update, updatedAt: now() });
+		store.updatePullRequest(id, {
+			...update,
+			...(update.status === 'queued' && { firstQueuedAt: firstQueuedAtFor(tracked, now()) }),
+			updatedAt: now(),
+		});
 		store.recordActivity(id, 'manual_action', update);
 		logger.info('pull_request_manual_action', { id, from: tracked.status, to: update.status });
 		abortUnwantedReviews();

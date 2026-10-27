@@ -52,6 +52,7 @@ export interface TrackedPullRequest {
 	lastSummary: string | null;
 	lastError: string | null;
 	reviewStartedAt: number | null;
+	firstQueuedAt: number | null;
 	trackedSince: number;
 	updatedAt: number;
 }
