@@ -52,7 +52,11 @@ export const buildClaudeEnv = ({
 }: BuildClaudeEnvParams): Record<string, string | undefined> => {
 	const environment = Object.fromEntries(
 		Object.entries(baseEnv).filter(
-			([name]) => name !== 'ANTHROPIC_API_KEY' && !isDangerousGitVariable(name),
+			([name]) =>
+				name !== 'ANTHROPIC_API_KEY' &&
+				name !== 'NODE_OPTIONS' &&
+				!name.startsWith('BUN_') &&
+				!isDangerousGitVariable(name),
 		),
 	);
 

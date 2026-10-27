@@ -14,6 +14,8 @@ jobs:
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
 
       - name: Check and test
         working-directory: service
@@ -27,9 +29,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
       - name: Test
         working-directory: app
         run: swift test
+
+      - name: Build the app bundle
+        working-directory: app
+        run: scripts/build-app.sh
+
+      - name: Smoke-test the bundled service
+        run: sh scripts/smoke-service-binary.sh app/build/ProxyReviewBot.app/Contents/MacOS/proxy-review-bot-service
 
       - name: Check the installer
         run: |

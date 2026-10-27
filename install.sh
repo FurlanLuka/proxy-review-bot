@@ -59,15 +59,6 @@ uninstall() {
     fi
 }
 
-ensure_bun() {
-    if command -v bun >/dev/null 2>&1 || [ -x "$HOME/.bun/bin/bun" ]; then
-        return
-    fi
-
-    say "Installing Bun (runs the review service)..."
-    curl -fsSL https://bun.sh/install | bash >/dev/null
-}
-
 check_tools() {
     command -v gh >/dev/null 2>&1 || fail "GitHub CLI not found. Install it with: brew install gh, then run: gh auth login"
     command -v git >/dev/null 2>&1 || fail "git not found. Install it with: xcode-select --install"
@@ -166,7 +157,6 @@ main() {
     fi
 
     check_tools
-    ensure_bun
     install_app
     enable_login_item
 

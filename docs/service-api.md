@@ -1,15 +1,21 @@
 # Service API
 
-The menu bar app starts the Bun service and talks to it over HTTP on 127.0.0.1.
+The menu bar app starts the review service and talks to it over HTTP on 127.0.0.1.
 
 ## Launch
 
-The app runs `<bun> <service>/src/main.ts` with:
+The service is compiled with `bun build --compile` (from `src/entry.ts`, with `.env` and `bunfig.toml` autoloading turned off) into `ProxyReviewBot.app/Contents/MacOS/proxy-review-bot-service`, so users don't need Bun. The installed app only runs that binary. When the app runs outside a `.app` bundle (development), it runs `<bun> --no-env-file <service>/src/entry.ts` instead.
+
+Either way it starts with:
 
 - `PRB_TOKEN`: a random token the app generates on each launch.
 - `PATH`: the login shell's PATH.
 
 stdin is kept open as a pipe. The service exits when stdin closes, which happens when the app quits or crashes.
+
+### Command shims
+
+On start the service writes `gh` and `git` shims into `<data dir>/bin` and puts that folder first on Claude's PATH. Each shim records the caller's directory in `PRB_SHIM_CWD`, changes to the shim folder, and re-runs the service with the internal `--command-shim <tool> <real path>` argument. That blocks writes and runs the real tool back in the caller's directory. Because Bun starts from the shim folder, a `.env` or `bunfig.toml` in the repo under review is never loaded. The shim also unsets every `BUN_*` variable and `NODE_OPTIONS` before starting Bun, and the service strips them from Claude's environment, so a `BUN_OPTIONS=--preload …` can't run code either. Only `gh` and `git` are accepted; any other tool name exits 2.
 
 Once it's listening, the service prints one JSON line to stdout:
 

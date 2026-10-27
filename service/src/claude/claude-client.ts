@@ -14,6 +14,7 @@ import {
 import type { ClaudeRunOutcome, ReplyResult, ReviewResult } from '../review/review-result.js';
 import { buildClaudeArgs, buildClaudeEnv } from './claude-args.js';
 import type { ClaudeJobKind } from './claude-args.js';
+import { buildShimScript } from './command-shim.js';
 import { buildReviewPrompt, REPLY_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT } from './prompts.js';
 
 const REVIEW_TIMEOUT_MS = 30 * 60_000;
@@ -38,16 +39,14 @@ export interface ClaudeClient {
 
 interface InstallCommandShimsParams {
 	shimDirectory: string;
-	bunPath: string;
-	shimScriptPath: string;
+	shimCommand: string[];
 	realGhPath: string;
 	realGitPath: string;
 }
 
 export const installCommandShims = ({
 	shimDirectory,
-	bunPath,
-	shimScriptPath,
+	shimCommand,
 	realGhPath,
 	realGitPath,
 }: InstallCommandShimsParams): void => {
@@ -61,7 +60,7 @@ export const installCommandShims = ({
 
 		writeFileSync(
 			shimPath,
-			`#!/bin/sh\nexec "${bunPath}" "${shimScriptPath}" ${toolName} "${realPath}" "$@"\n`,
+			buildShimScript({ shimCommand, toolName, realPath, safeDirectory: shimDirectory }),
 		);
 		chmodSync(shimPath, 0o755);
 	}

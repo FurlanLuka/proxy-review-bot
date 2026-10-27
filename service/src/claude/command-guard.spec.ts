@@ -175,11 +175,17 @@ describe('buildClaudeEnv', () => {
 				GIT_PAGER: 'delta',
 				GIT_SSH_COMMAND: 'ssh -i key',
 				GIT_EDITOR: 'vim',
+				BUN_OPTIONS: '--preload /tmp/x.ts',
+				BUN_INSPECT: 'ws://localhost:1',
+				NODE_OPTIONS: '--require /tmp/x.js',
 			},
 			shimDirectory: '/shims',
 		});
 
 		expect(environment.ANTHROPIC_API_KEY).toBeUndefined();
+		expect(environment.BUN_OPTIONS).toBeUndefined();
+		expect(environment.BUN_INSPECT).toBeUndefined();
+		expect(environment.NODE_OPTIONS).toBeUndefined();
 		expect(hasDangerousGitEnvironment(environment)).toBe(false);
 		expect(environment.PATH).toBe('/shims:/usr/bin');
 		expect(environment.HOME).toBe('/Users/x');

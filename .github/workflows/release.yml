@@ -17,6 +17,8 @@ jobs:
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
 
       - name: Test the service
         working-directory: service
@@ -34,6 +36,9 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           VERSION="$VERSION" ZIP_OUTPUT="$PWD/ProxyReviewBot_${VERSION}_macos_arm64.zip" scripts/build-app.sh
+
+      - name: Smoke-test the bundled service
+        run: sh scripts/smoke-service-binary.sh app/build/ProxyReviewBot.app/Contents/MacOS/proxy-review-bot-service
 
       - name: Publish the release
         env:

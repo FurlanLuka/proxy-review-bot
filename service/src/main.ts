@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { createApiHandler } from './api/api.js';
 import { createBot } from './bot/bot.js';
 import { createClaudeClient, installCommandShims } from './claude/claude-client.js';
+import { isCompiledEntry, resolveShimCommand } from './claude/command-shim.js';
 import { createCloneManager } from './clones/clones.js';
 import { killRunningCommands, runCommand } from './commands/run-command.js';
 import { createGitHubClient } from './github/github-client.js';
@@ -64,14 +65,19 @@ const claudePath = resolveTool(toolPaths.claude, 'claude');
 const ghPath = resolveTool(toolPaths.gh, 'gh');
 const gitPath = resolveTool(toolPaths.git, 'git');
 const shimDirectory = join(dataDirectory, 'bin');
+const shimCommand = resolveShimCommand({
+	bunMain: Bun.main,
+	execPath: process.execPath,
+	entryPath: join(import.meta.dir, 'entry.ts'),
+});
+const isCompiledBinary = isCompiledEntry(Bun.main);
 const baseEnv = { ...process.env };
 const token = process.env.PRB_TOKEN ?? randomUUID();
 
 if (ghPath !== null && gitPath !== null) {
 	installCommandShims({
 		shimDirectory,
-		bunPath: process.execPath,
-		shimScriptPath: join(import.meta.dir, 'claude', 'command-shim.ts'),
+		shimCommand,
 		realGhPath: ghPath,
 		realGitPath: gitPath,
 	});
@@ -142,6 +148,7 @@ logger.info('service_started', {
 	ghPath,
 	gitPath,
 	resetCount,
+	isCompiledBinary,
 	hasProvidedToken: process.env.PRB_TOKEN !== undefined,
 });
 process.stdout.write(`${JSON.stringify({ event: 'listening', port: server.port })}\n`);

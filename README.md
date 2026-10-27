@@ -7,6 +7,12 @@ A local macOS menu bar bot that reviews GitHub pull requests where you are perso
 
 ![Menu](docs/screenshots/final/dark/menu.png)
 
+## What changed in 0.4.1
+
+- Bun is bundled inside the app, so there's nothing extra to install. The download is larger (about 26 MB).
+- Security fix: the gh/git guards no longer load a `.env` or `bunfig.toml` from the repo under review. Before 0.4.1, a PR could ship a `bunfig.toml` preload that ran code during a review.
+- If you installed Bun only for this bot, you can remove `~/.bun`. The installer never removes it.
+
 ## What changed in 0.4.0
 
 - Once you start a review, the PR stays in In review until it's done. New commits, a re-request (even on the same commit) and a failed run after its backoff start the next round on their own, also in manual mode. You still check and post every draft.
@@ -17,12 +23,12 @@ A local macOS menu bar bot that reviews GitHub pull requests where you are perso
 
 ## Requirements
 
-- macOS 14 or later.
-- Xcode or the Swift toolchain.
-- Bun, at `~/.bun/bin/bun` or on PATH.
+- macOS 14 or later, on Apple silicon.
 - `gh`, logged in.
 - Claude Code, logged in with your subscription (`claude auth login`).
 - The proxy plugin at version 1.6 or later, with the `pr-review` skill (`claude plugin update proxy@proxy-marketplace`).
+
+To build from source you also need Xcode or the Swift toolchain, and Bun 1.4.2 at `~/.bun/bin/bun` or on PATH.
 
 The menu shows a **Setup needed** section with the fix command for anything that's missing.
 
@@ -41,7 +47,7 @@ gh api repos/FurlanLuka/proxy-review-bot/contents/install.sh -H 'Accept: applica
 The installer:
 
 1. Checks for an Apple Silicon Mac on macOS 14 or later.
-2. Checks for `gh` and `git`, and installs Bun if it's missing.
+2. Checks for `gh` and `git`. Nothing else is installed: the review service ships inside the app.
 3. Downloads the latest release using your `gh` login, and installs it to `~/Applications/ProxyReviewBot.app`.
 4. Adds a LaunchAgent (`~/Library/LaunchAgents/com.furlanluka.proxy-review-bot.plist`), so the app starts at login and restarts if it crashes. Quitting it from the menu keeps it quit until your next login.
 5. Starts the app.
@@ -80,7 +86,7 @@ To develop the service on its own, without the app:
 
 ```sh
 cd service
-PRB_DATA_DIR=/tmp/prb PRB_TOKEN=dev ~/.bun/bin/bun src/main.ts
+PRB_DATA_DIR=/tmp/prb PRB_TOKEN=dev ~/.bun/bin/bun --no-env-file src/entry.ts
 curl -H 'Authorization: Bearer dev' http://127.0.0.1:<port>/state
 ```
 

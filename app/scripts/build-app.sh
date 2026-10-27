@@ -4,10 +4,10 @@ set -euo pipefail
 app_directory="$(cd "$(dirname "$0")/.." && pwd)"
 service_source_directory="$(cd "$app_directory/../service" && pwd)"
 bun_executable="$(command -v bun || echo "$HOME/.bun/bin/bun")"
-version="${VERSION:-0.4.0}"
+version="${VERSION:-0.4.1}"
 bundle_directory="$app_directory/build/ProxyReviewBot.app"
 contents_directory="$bundle_directory/Contents"
-bundled_service_directory="$contents_directory/Resources/service"
+service_binary="$contents_directory/MacOS/proxy-review-bot-service"
 
 cd "$app_directory"
 
@@ -45,10 +45,19 @@ cat > "$contents_directory/Info.plist" <<PLIST
 </plist>
 PLIST
 
-rsync -a --exclude node_modules --exclude .DS_Store "$service_source_directory/" "$bundled_service_directory/"
-(cd "$bundled_service_directory" && "$bun_executable" install --production)
+(cd "$service_source_directory" && "$bun_executable" install --frozen-lockfile)
+"$bun_executable" build "$service_source_directory/src/entry.ts" \
+	--compile \
+	--target=bun-darwin-arm64 \
+	--minify \
+	--sourcemap \
+	--no-compile-autoload-dotenv \
+	--no-compile-autoload-bunfig \
+	--outfile "$service_binary"
+rm -f "$service_binary.map"
 
-codesign --force --deep -s - "$bundle_directory"
+codesign --force -s - --identifier com.furlanluka.proxy-review-bot.service "$service_binary"
+codesign --force -s - "$bundle_directory"
 
 echo "Built $bundle_directory"
 

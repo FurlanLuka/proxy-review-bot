@@ -1,10 +1,10 @@
 {
 	"name": "proxy-review-bot-service",
-	"version": "0.4.0",
+	"version": "0.4.1",
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"start": "bun src/main.ts",
+		"start": "bun --no-env-file src/entry.ts",
 		"test": "bun test",
 		"typecheck": "tsc --noEmit",
 		"check": "biome check . && eslint . && tsc --noEmit",

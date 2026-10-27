@@ -26,15 +26,14 @@ final class ServiceProcess {
 
     func start() {
         Task {
-            configuration = await Task.detached { ServiceLaunchConfiguration.resolve() }.value
-
-            guard configuration != nil else {
-                Logger.service.error("Service directory not found")
-                onExit?("Service files not found")
-                return
+            switch await Task.detached(operation: { ServiceLaunchConfiguration.resolve() }).value {
+            case .success(let resolved):
+                configuration = resolved
+                launch()
+            case .failure(let error):
+                Logger.service.error("Review service not found: \(error.message, privacy: .public)")
+                onExit?(error.message)
             }
-
-            launch()
         }
     }
 
@@ -85,9 +84,9 @@ final class ServiceProcess {
         environment["PATH"] = configuration.path
         environment["PRB_TOKEN"] = token
 
-        process.executableURL = configuration.bunURL
-        process.arguments = ["src/main.ts"]
-        process.currentDirectoryURL = configuration.serviceDirectory
+        process.executableURL = configuration.plan.executableURL
+        process.arguments = configuration.plan.arguments
+        process.currentDirectoryURL = configuration.plan.workingDirectory
         process.environment = environment
         process.standardInput = standardInputPipe
         process.standardOutput = standardOutputPipe
@@ -119,8 +118,8 @@ final class ServiceProcess {
         do {
             try process.run()
         } catch {
-            Logger.service.error("Could not start \(configuration.bunURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
-            onExit?("Could not start bun")
+            Logger.service.error("Could not start \(configuration.plan.executableURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            onExit?("Could not start the review service")
             scheduleRestart()
             return
         }
@@ -128,7 +127,7 @@ final class ServiceProcess {
         self.process = process
         self.standardInputPipe = standardInputPipe
         launchedAt = Date()
-        Logger.service.info("Service started (pid \(process.processIdentifier)) in \(configuration.serviceDirectory.path, privacy: .public)")
+        Logger.service.info("Service started (pid \(process.processIdentifier)): \(configuration.plan.executableURL.path, privacy: .public) \(configuration.plan.arguments.joined(separator: " "), privacy: .public)")
     }
 
     private func handleOutputLine(_ line: String) {
