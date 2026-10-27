@@ -55,6 +55,9 @@ const MIGRATIONS = [
 	`UPDATE tracked_pull_requests SET first_queued_at = tracked_since
 		WHERE rounds > 0
 			OR status IN ('queued', 'reviewing', 'waiting_on_author', 'awaiting_approval', 'draft_ready', 'blocked')`,
+	'ALTER TABLE tracked_pull_requests ADD COLUMN repair_session_id TEXT',
+	'ALTER TABLE tracked_pull_requests ADD COLUMN repair_head_sha TEXT',
+	'ALTER TABLE tracked_pull_requests ADD COLUMN repair_saved_at INTEGER',
 ];
 
 const COLUMN_NAMES: Record<keyof PullRequestUpdate, string> = {
@@ -78,6 +81,9 @@ const COLUMN_NAMES: Record<keyof PullRequestUpdate, string> = {
 	lastError: 'last_error',
 	reviewStartedAt: 'review_started_at',
 	firstQueuedAt: 'first_queued_at',
+	repairSessionId: 'repair_session_id',
+	repairHeadSha: 'repair_head_sha',
+	repairSavedAt: 'repair_saved_at',
 	trackedSince: 'tracked_since',
 	updatedAt: 'updated_at',
 };
@@ -107,6 +113,9 @@ interface PullRequestRow {
 	last_error: string | null;
 	review_started_at: number | null;
 	first_queued_at: number | null;
+	repair_session_id: string | null;
+	repair_head_sha: string | null;
+	repair_saved_at: number | null;
 	tracked_since: number;
 	updated_at: number;
 }
@@ -139,6 +148,9 @@ const toTrackedPullRequest = (row: PullRequestRow): TrackedPullRequest => ({
 	lastError: row.last_error,
 	reviewStartedAt: row.review_started_at,
 	firstQueuedAt: row.first_queued_at,
+	repairSessionId: row.repair_session_id,
+	repairHeadSha: row.repair_head_sha,
+	repairSavedAt: row.repair_saved_at,
 	trackedSince: row.tracked_since,
 	updatedAt: row.updated_at,
 });

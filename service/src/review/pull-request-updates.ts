@@ -10,6 +10,12 @@ export const firstQueuedAtFor = (
 	return tracked.firstQueuedAt ?? now;
 };
 
+export const CLEARED_REPAIR_SESSION = {
+	repairSessionId: null,
+	repairHeadSha: null,
+	repairSavedAt: null,
+} as const;
+
 export const buildReviewCycleReset = (now: number): PullRequestUpdate => ({
 	rounds: 0,
 	attemptsForHead: 0,
@@ -38,16 +44,24 @@ export const buildActionUpdate = (
 		case 'none':
 			return null;
 		case 'finish':
-			return { status: 'done', pendingApproval: null, lastError: null, reviewStartedAt: null };
+			return {
+				status: 'done',
+				pendingApproval: null,
+				lastError: null,
+				reviewStartedAt: null,
+				...CLEARED_REPAIR_SESSION,
+			};
 		case 'take_over':
 			return {
 				status: 'needs_you',
 				pendingApproval: null,
 				lastError: 'You reviewed this PR yourself',
+				...CLEARED_REPAIR_SESSION,
 			};
 		case 'reopen':
 			return {
 				...buildReviewCycleReset(now),
+				...CLEARED_REPAIR_SESSION,
 				status: 'needs_review',
 				firstQueuedAt: tracked.status === 'stopped' ? null : tracked.firstQueuedAt,
 			};

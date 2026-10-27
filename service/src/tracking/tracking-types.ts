@@ -53,6 +53,9 @@ export interface TrackedPullRequest {
 	lastError: string | null;
 	reviewStartedAt: number | null;
 	firstQueuedAt: number | null;
+	repairSessionId: string | null;
+	repairHeadSha: string | null;
+	repairSavedAt: number | null;
 	trackedSince: number;
 	updatedAt: number;
 }

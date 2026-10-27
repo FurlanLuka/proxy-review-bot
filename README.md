@@ -7,6 +7,12 @@ A local macOS menu bar bot that reviews GitHub pull requests where you are perso
 
 ![Menu](docs/screenshots/final/dark/menu.png)
 
+## What changed in 0.4.2
+
+- When a review finishes but Claude doesn't return its structured result, the bot resumes the same Claude session and asks for the result (up to 5 tries, shown as "Collecting the finished review") instead of redoing the review. If that still fails, the card says "Claude finished but never returned the review", and Review Again tries the saved session first. Failed final results are saved to `failed-results/` in the data folder (newest 10) for debugging.
+- Results recovered by a repair, or read from the end of Claude's reply text, are always held as a draft for you to approve, even in auto mode.
+- Each review now leaves a Claude Code session behind, stored under `~/.claude/projects/` (one folder per review worktree). They belong to the bot and are safe to ignore; Claude Code's normal session retention cleans them up. The transcripts contain the PR's content, which is untrusted, so treat them like the PR itself. Replies don't keep sessions. To look inside a failed one, run `claude --resume <sessionId>` with the `sessionId` from the `repair_started` line in the service log. A saved session is only reused for 24 hours, and never after the PR's head moves, you press Stop, or the PR is merged or closed. It is kept when the bot gives up after two failed attempts on a commit, so Review Again resumes it before running a full review.
+
 ## What changed in 0.4.1
 
 - Bun is bundled inside the app, so there's nothing extra to install. The download is larger (about 26 MB).

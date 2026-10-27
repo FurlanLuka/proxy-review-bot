@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CommandResult, RunCommand } from '../commands/run-command.js';
 import type { Logger } from '../logging/logger.js';
@@ -15,10 +15,17 @@ import type { ClaudeRunOutcome, ReplyResult, ReviewResult } from '../review/revi
 import { buildClaudeArgs, buildClaudeEnv } from './claude-args.js';
 import type { ClaudeJobKind } from './claude-args.js';
 import { buildShimScript } from './command-shim.js';
-import { buildReviewPrompt, REPLY_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT } from './prompts.js';
+import {
+	buildReviewPrompt,
+	REPAIR_PROMPT,
+	REPLY_SYSTEM_PROMPT,
+	REVIEW_SYSTEM_PROMPT,
+} from './prompts.js';
 
 const REVIEW_TIMEOUT_MS = 30 * 60_000;
 const REPLY_TIMEOUT_MS = 5 * 60_000;
+const REPAIR_TIMEOUT_MS = 3 * 60_000;
+const KEPT_FAILED_RESULTS = 10;
 
 interface RunReviewParams {
 	pullRequestUrl: string;
@@ -32,10 +39,26 @@ interface RunReplyParams {
 	clonePath: string;
 }
 
+export interface RunRepairParams {
+	sessionId: string;
+	clonePath: string;
+	attempt: number;
+	signal?: AbortSignal;
+}
+
 export interface ClaudeClient {
 	runReview(params: RunReviewParams): Promise<ClaudeRunOutcome<ReviewResult>>;
+	runRepair(params: RunRepairParams): Promise<ClaudeRunOutcome<ReviewResult>>;
 	runReply(params: RunReplyParams): Promise<ClaudeRunOutcome<ReplyResult>>;
 }
+
+type ClaudeRunKind = ClaudeJobKind | 'repair';
+
+const TIMEOUT_BY_KIND: Record<ClaudeRunKind, number> = {
+	review: REVIEW_TIMEOUT_MS,
+	reply: REPLY_TIMEOUT_MS,
+	repair: REPAIR_TIMEOUT_MS,
+};
 
 interface InstallCommandShimsParams {
 	shimDirectory: string;
@@ -66,16 +89,49 @@ export const installCommandShims = ({
 	}
 };
 
+interface SaveFailedResultParams {
+	directory: string;
+	kind: ClaudeRunKind;
+	rawEnvelope: string;
+	now: number;
+}
+
+export const saveFailedResult = ({
+	directory,
+	kind,
+	rawEnvelope,
+	now,
+}: SaveFailedResultParams): string => {
+	mkdirSync(directory, { recursive: true });
+
+	const filePath = join(directory, `${now}-${kind}.json`);
+
+	writeFileSync(filePath, rawEnvelope);
+
+	const staleFiles = readdirSync(directory)
+		.filter((name) => name.endsWith('.json'))
+		.sort()
+		.reverse()
+		.slice(KEPT_FAILED_RESULTS);
+
+	for (const name of staleFiles) {
+		rmSync(join(directory, name), { force: true });
+	}
+
+	return filePath;
+};
+
 interface CreateClaudeClientParams {
 	claudePath: string;
 	shimDirectory: string;
+	failedResultsDirectory: string;
 	runCommand: RunCommand;
 	logger: Logger;
 	baseEnv: Record<string, string | undefined>;
 }
 
 interface RunClaudeParams<Result> {
-	kind: ClaudeJobKind;
+	kind: ClaudeRunKind;
 	args: string[];
 	clonePath: string;
 	parse: (output: CommandResult) => ClaudeRunOutcome<Result>;
@@ -86,10 +142,33 @@ interface RunClaudeParams<Result> {
 export const createClaudeClient = ({
 	claudePath,
 	shimDirectory,
+	failedResultsDirectory,
 	runCommand,
 	logger,
 	baseEnv,
 }: CreateClaudeClientParams): ClaudeClient => {
+	const keepFailedResult = (
+		kind: ClaudeRunKind,
+		rawEnvelope: string | undefined,
+	): string | null => {
+		if (rawEnvelope === undefined) {
+			return null;
+		}
+
+		try {
+			return saveFailedResult({
+				directory: failedResultsDirectory,
+				kind,
+				rawEnvelope,
+				now: Date.now(),
+			});
+		} catch (error) {
+			logger.error('failed_result_save_failed', { kind, error });
+
+			return null;
+		}
+	};
+
 	const runClaude = async <Result>({
 		kind,
 		args,
@@ -104,7 +183,7 @@ export const createClaudeClient = ({
 			args: ['-i', claudePath, ...args],
 			cwd: clonePath,
 			env: buildClaudeEnv({ baseEnv, shimDirectory }),
-			timeoutMs: kind === 'review' ? REVIEW_TIMEOUT_MS : REPLY_TIMEOUT_MS,
+			timeoutMs: TIMEOUT_BY_KIND[kind],
 			onStdoutLine,
 			signal,
 		});
@@ -120,10 +199,14 @@ export const createClaudeClient = ({
 		};
 
 		if (outcome.kind === 'failed') {
+			const failedResultPath = keepFailedResult(kind, outcome.rawEnvelope);
+
 			logger.warn('claude_run_finished', {
 				...fields,
 				summary: outcome.summary,
 				schemaIssues: outcome.schemaIssues,
+				diagnostics: outcome.diagnostics,
+				failedResultPath,
 			});
 		} else {
 			logger.info('claude_run_finished', fields);
@@ -141,7 +224,6 @@ export const createClaudeClient = ({
 				jsonSchema: REVIEW_RESULT_JSON_SCHEMA,
 			});
 			const progress = { current: createReviewProgress(Date.now(), 'Starting the review') };
-
 			onProgress?.(progress.current);
 
 			return runClaude({
@@ -150,7 +232,12 @@ export const createClaudeClient = ({
 				clonePath,
 				signal,
 				parse: (output) =>
-					parseClaudeOutput({ output, schema: REVIEW_RESULT_SCHEMA, now: Date.now() }),
+					parseClaudeOutput({
+						output,
+						schema: REVIEW_RESULT_SCHEMA,
+						now: Date.now(),
+						allowTextFallback: true,
+					}),
 				onStdoutLine: (line) => {
 					const next = applyStreamLine(progress.current, line, Date.now());
 
@@ -159,6 +246,29 @@ export const createClaudeClient = ({
 						onProgress?.(next);
 					}
 				},
+			});
+		},
+		runRepair: ({ sessionId, clonePath, attempt, signal }) => {
+			logger.info('claude_repair_run', { sessionId, attempt });
+
+			return runClaude({
+				kind: 'repair',
+				args: buildClaudeArgs({
+					kind: 'review',
+					prompt: REPAIR_PROMPT,
+					systemPrompt: REVIEW_SYSTEM_PROMPT,
+					jsonSchema: REVIEW_RESULT_JSON_SCHEMA,
+					resumeSessionId: sessionId,
+				}),
+				clonePath,
+				signal,
+				parse: (output) =>
+					parseClaudeOutput({
+						output,
+						schema: REVIEW_RESULT_SCHEMA,
+						now: Date.now(),
+						allowTextFallback: true,
+					}),
 			});
 		},
 		runReply: ({ prompt, clonePath }) => {

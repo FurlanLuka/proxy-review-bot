@@ -20,6 +20,7 @@ export interface BotDependencies {
 	runReadinessChecks: () => Promise<ReadinessReport>;
 	logger: Logger;
 	now: () => number;
+	sleep: (milliseconds: number) => Promise<void>;
 }
 
 export interface BotRuntime {

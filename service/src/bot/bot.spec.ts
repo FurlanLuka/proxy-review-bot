@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'bun:test';
 import { createBotMarker } from '../review/bot-marker.js';
 import { QUIET_PERIOD_MS } from '../review/review-decisions.js';
+import {
+	MAX_REPAIR_ATTEMPTS,
+	REPAIR_PAUSE_MS,
+	repairProgressMessage,
+	SAVED_SESSION_MAX_AGE_MS,
+	UNREPAIRED_RESULT_SUMMARY,
+} from '../review/review-repair-rules.js';
 import { DEFAULT_SETTINGS } from '../settings/settings.js';
 import { makeComment, makeDraft, makeThread } from '../test-support/factories.js';
 import { createTestHarness, expectNoLeakedWorktrees, VIEWER_LOGIN } from '../test-support/fakes.js';
@@ -1943,6 +1950,535 @@ describe('progress lifecycle across jobs', () => {
 
 		gate.open();
 		await setup.settle();
+	});
+});
+
+describe('repairing a review that returned no structured result', () => {
+	const missingResult = (sessionId: string) => ({
+		kind: 'failed' as const,
+		summary: "Claude's result had the wrong shape (result: Required)",
+		schemaIssues: ['result: Required'],
+		repairSessionId: sessionId,
+	});
+	const failedRepair = missingResult('session-1');
+
+	const wrongShapeRepairs = (count: number) => {
+		return Array.from({ length: count }, (_, index) => missingResult(`session-r${index + 1}`));
+	};
+
+	const startManualReview = async () => {
+		const setup = setUp({ reviewMode: 'manual' });
+
+		setup.github.addPullRequest(7);
+		await setup.tickAndSettle();
+
+		return { setup, id: setup.statusOf(7)?.id ?? 0 };
+	};
+
+	const storedRepairFields = (setup: ReturnType<typeof setUp>, id: number) => {
+		const tracked = setup.dependencies.store.getPullRequest(id);
+
+		return { sessionId: tracked?.repairSessionId, headSha: tracked?.repairHeadSha };
+	};
+
+	it("missing result → resumed in the job's worktree, draft held, no second full review", async () => {
+		const { setup, id } = await startManualReview();
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.claude.repairOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.bot.requestReview(id);
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.claude.repairCalls).toEqual([
+			{ sessionId: 'session-1', clonePath: setup.clones.prepared[0] ?? '', attempt: 1 },
+		]);
+		expect(setup.clones.prepared).toHaveLength(1);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+		expect(storedRepairFields(setup, id)).toEqual({ sessionId: null, headSha: null });
+	});
+
+	it('repair fails twice then succeeds → 3 repairs with a pause between, still one full review', async () => {
+		const { setup, id } = await startManualReview();
+		const pauses: number[] = [];
+
+		setup.dependencies.sleep = async (milliseconds) => {
+			pauses.push(milliseconds);
+		};
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.claude.repairOutcomes.push(failedRepair, failedRepair, draftedFor('head-1', 'comment'));
+		setup.bot.requestReview(id);
+		await setup.settle();
+
+		expect(setup.claude.repairCalls.map((call) => call.attempt)).toEqual([1, 2, 3]);
+		expect(pauses).toEqual([REPAIR_PAUSE_MS, REPAIR_PAUSE_MS]);
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+	});
+
+	it('5 failed repairs → normal failure, the newest session is saved for the next attempt', async () => {
+		const { setup, id } = await startManualReview();
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.claude.repairOutcomes.push(...wrongShapeRepairs(MAX_REPAIR_ATTEMPTS));
+		setup.bot.requestReview(id);
+		await setup.settle();
+
+		expect(setup.claude.repairCalls).toHaveLength(MAX_REPAIR_ATTEMPTS);
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.statusOf(7)).toMatchObject({
+			status: 'waiting_on_author',
+			reason: UNREPAIRED_RESULT_SUMMARY,
+		});
+		expect(UNREPAIRED_RESULT_SUMMARY).toBe(
+			'Claude finished but never returned the review (5 repair tries failed)',
+		);
+		expect(setup.claude.repairCalls.map((call) => call.sessionId)).toEqual([
+			'session-1',
+			'session-r1',
+			'session-r2',
+			'session-r3',
+			'session-r4',
+		]);
+		expect(storedRepairFields(setup, id)).toEqual({ sessionId: 'session-r5', headSha: 'head-1' });
+	});
+
+	it('Review Again on the same head → the saved session is repaired in a fresh worktree, no full review', async () => {
+		const { setup, id } = await startManualReview();
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.bot.requestReview(id);
+		await setup.settle();
+		setup.claude.repairOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.bot.requestReview(id);
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.claude.repairCalls.at(-1)).toEqual({
+			sessionId: 'session-1',
+			clonePath: setup.clones.prepared[1] ?? '',
+			attempt: 1,
+		});
+		expect(setup.clones.prepared[1]).not.toBe(setup.clones.prepared[0]);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+		expect(storedRepairFields(setup, id)).toEqual({ sessionId: null, headSha: null });
+	});
+
+	it('saved session repairs all fail → falls back to a full review in the same job', async () => {
+		const { setup, id } = await startManualReview();
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.claude.repairOutcomes.push(...wrongShapeRepairs(MAX_REPAIR_ATTEMPTS));
+		setup.bot.requestReview(id);
+		await setup.settle();
+		setup.claude.repairOutcomes.push(...wrongShapeRepairs(MAX_REPAIR_ATTEMPTS));
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.bot.requestReview(id);
+		await setup.settle();
+
+		expect(setup.claude.repairCalls).toHaveLength(MAX_REPAIR_ATTEMPTS * 2);
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+		expect(storedRepairFields(setup, id)).toEqual({ sessionId: null, headSha: null });
+	});
+
+	it('the head moved since the failure → a full review on the new head, the old session is dropped', async () => {
+		const { setup, id } = await startManualReview();
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.bot.requestReview(id);
+		await setup.settle();
+		pushCommit(setup, 7, 'head-2');
+		setup.claude.reviewOutcomes.push(draftedFor('head-2', 'comment'));
+		setup.bot.requestReview(id);
+		await setup.settle();
+
+		expect(setup.claude.repairCalls).toHaveLength(1);
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+		expect(storedRepairFields(setup, id)).toEqual({ sessionId: null, headSha: null });
+	});
+
+	it('each repair try shows progress, keeping the advisors from the full review', async () => {
+		const { setup, id } = await startManualReview();
+		const gate = createGate();
+
+		setup.claude.reviewProgressLines = [
+			JSON.stringify({
+				type: 'system',
+				subtype: 'task_started',
+				tool_use_id: 't1',
+				subagent_type: 'proxy:product',
+				description: 'Scope',
+			}),
+		];
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.claude.repairOutcomes.push(failedRepair);
+		setup.claude.repairGate = gate.promise;
+		setup.bot.requestReview(id);
+		await waitUntil(() => setup.claude.repairCalls.length === 1);
+
+		const progress = setup.statusOf(7)?.progress;
+
+		expect(progress?.message).toBe(repairProgressMessage(1));
+		expect(progress?.subagents.map((subagent) => subagent.label)).toEqual(['Product']);
+
+		setup.claude.repairOutcomes.push(draftedFor('head-1', 'comment'));
+		gate.open();
+		await setup.settle();
+
+		expect(repairProgressMessage(2)).toBe('Collecting the finished review (try 2 of 5)');
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+	});
+
+	it('Review Again repairs show progress too, starting from a fresh progress', async () => {
+		const { setup, id } = await startManualReview();
+		const gate = createGate();
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.bot.requestReview(id);
+		await setup.settle();
+		setup.claude.repairGate = gate.promise;
+		setup.claude.repairOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.bot.requestReview(id);
+		await waitUntil(() => setup.claude.repairCalls.length === MAX_REPAIR_ATTEMPTS + 1);
+
+		expect(setup.statusOf(7)?.progress).toMatchObject({
+			message: repairProgressMessage(1),
+			subagents: [],
+		});
+
+		gate.open();
+		await setup.settle();
+	});
+
+	it('a repair returning outcome "failed" → a normal failed review, the session is cleared', async () => {
+		const { setup, id } = await startManualReview();
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.claude.repairOutcomes.push({
+			kind: 'result',
+			result: { outcome: 'failed', summary: 'Could not read the diff' },
+		});
+		setup.bot.requestReview(id);
+		await setup.settle();
+
+		expect(setup.claude.repairCalls).toHaveLength(1);
+		expect(setup.statusOf(7)).toMatchObject({
+			status: 'waiting_on_author',
+			reason: 'Could not read the diff',
+		});
+		expect(storedRepairFields(setup, id)).toEqual({ sessionId: null, headSha: null });
+	});
+
+	it('Stop during repairs → the running repair is aborted, no more tries, worktree released', async () => {
+		const { setup, id } = await startManualReview();
+		const gate = createGate();
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.claude.repairGate = gate.promise;
+		setup.bot.requestReview(id);
+		await waitUntil(() => setup.claude.repairCalls.length === 1);
+		setup.bot.stop(id);
+		await setup.settle();
+
+		expect(setup.claude.abortedRepairs).toBe(1);
+		expect(setup.claude.repairCalls).toHaveLength(1);
+		expect(setup.github.submissions).toEqual([]);
+		expect(setup.statusOf(7)?.status).toBe('stopped');
+		expect(setup.clones.released).toEqual(setup.clones.prepared);
+		expect(storedRepairFields(setup, id)).toEqual({ sessionId: null, headSha: null });
+	});
+
+	it('released just as the full review returns a wrong-shape result → no session saved, no repair', async () => {
+		const { setup, id } = await startManualReview();
+		const gate = createGate();
+
+		setup.claude.reviewGate = gate.promise;
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.bot.requestReview(id);
+		await setup.claude.waitForReviewCall(1);
+		setup.dependencies.store.updatePullRequest(id, { status: 'stopped' });
+		gate.open();
+		await setup.settle();
+
+		expect(setup.claude.repairCalls).toEqual([]);
+		expect(setup.statusOf(7)?.status).toBe('stopped');
+		expect(storedRepairFields(setup, id)).toEqual({ sessionId: null, headSha: null });
+	});
+
+	it('released just as a repair returns another wrong-shape result → that session is not saved', async () => {
+		const { setup, id } = await startManualReview();
+		const gate = createGate();
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.claude.repairOutcomes.push(missingResult('session-r1'));
+		setup.claude.repairGate = gate.promise;
+		setup.bot.requestReview(id);
+		await waitUntil(() => setup.claude.repairCalls.length === 1);
+		setup.dependencies.store.updatePullRequest(id, {
+			status: 'stopped',
+			repairSessionId: null,
+			repairHeadSha: null,
+			repairSavedAt: null,
+		});
+		gate.open();
+		await setup.settle();
+
+		expect(setup.claude.repairCalls).toHaveLength(1);
+		expect(storedRepairFields(setup, id)).toEqual({ sessionId: null, headSha: null });
+	});
+
+	it('the saved session is gone (no conversation) → one repair, then a full review, session cleared', async () => {
+		const { setup, id } = await startManualReview();
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.claude.repairOutcomes.push(...wrongShapeRepairs(MAX_REPAIR_ATTEMPTS));
+		setup.bot.requestReview(id);
+		await setup.settle();
+		setup.claude.repairOutcomes.push({
+			kind: 'failed',
+			summary: 'Claude exited 1 without a result: No conversation found with session ID',
+		});
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.bot.requestReview(id);
+		await setup.settle();
+
+		expect(setup.claude.repairCalls).toHaveLength(MAX_REPAIR_ATTEMPTS + 1);
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+		expect(storedRepairFields(setup, id)).toEqual({ sessionId: null, headSha: null });
+	});
+
+	it('a repaired result that fails to apply (GitHub error) → the session is kept for the retry', async () => {
+		const { setup, id } = await startManualReview();
+		const gate = createGate();
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.claude.repairOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.claude.repairGate = gate.promise;
+		setup.bot.requestReview(id);
+		await waitUntil(() => setup.claude.repairCalls.length === 1);
+		setup.github.failPullRequestFetchesWith.push(502);
+		gate.open();
+		await setup.settle();
+
+		expect(setup.statusOf(7)?.status).toBe('waiting_on_author');
+		expect(storedRepairFields(setup, id)).toEqual({ sessionId: 'session-1', headSha: 'head-1' });
+	});
+
+	it('the card shows the current try while a later repair runs', async () => {
+		const { setup, id } = await startManualReview();
+		const firstGate = createGate();
+		const secondGate = createGate();
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.claude.repairOutcomes.push(failedRepair, draftedFor('head-1', 'comment'));
+		setup.claude.repairGate = firstGate.promise;
+		setup.bot.requestReview(id);
+		await waitUntil(() => setup.claude.repairCalls.length === 1);
+		setup.claude.repairGate = secondGate.promise;
+		firstGate.open();
+		await waitUntil(() => setup.claude.repairCalls.length === 2);
+
+		expect(setup.statusOf(7)?.progress?.message).toBe(repairProgressMessage(2));
+
+		secondGate.open();
+		await setup.settle();
+
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+	});
+
+	it('after giving up on a commit, Review Again still resumes the saved session first', async () => {
+		const { setup, id } = await startManualReview();
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.claude.repairOutcomes.push(...wrongShapeRepairs(MAX_REPAIR_ATTEMPTS));
+		setup.bot.requestReview(id);
+		await setup.settle();
+		setup.dependencies.store.updatePullRequest(id, {
+			status: 'needs_you',
+			lastError: 'Review failed 2 times on this commit',
+		});
+		setup.claude.repairOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.bot.retry(id);
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.claude.repairCalls.at(-1)?.sessionId).toBe('session-r5');
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+	});
+
+	it('the automatic retry after the backoff resumes the saved session, no second full review', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+
+		setup.github.addPullRequest(7);
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.claude.repairOutcomes.push(...wrongShapeRepairs(MAX_REPAIR_ATTEMPTS));
+		await setup.tickAndSettle();
+
+		expect(setup.statusOf(7)?.status).toBe('waiting_on_author');
+
+		setup.clock.now += 11 * 60_000;
+		setup.claude.repairOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.tickAndSettle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.claude.repairCalls).toHaveLength(MAX_REPAIR_ATTEMPTS + 1);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+	});
+
+	it('the session is saved as soon as the wrong-shape result arrives, before the first repair', async () => {
+		const { setup, id } = await startManualReview();
+		const gate = createGate();
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.claude.repairGate = gate.promise;
+		setup.bot.requestReview(id);
+		await waitUntil(() => setup.claude.repairCalls.length === 1);
+
+		expect(storedRepairFields(setup, id)).toEqual({ sessionId: 'session-1', headSha: 'head-1' });
+		expect(setup.dependencies.store.getPullRequest(id)?.repairSavedAt).toBe(setup.clock.now);
+
+		setup.claude.repairOutcomes.push(draftedFor('head-1', 'comment'));
+		gate.open();
+		await setup.settle();
+	});
+
+	it('usage limit during the in-job repair → requeued, the session is kept', async () => {
+		const { setup, id } = await startManualReview();
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.claude.repairOutcomes.push({ kind: 'usage_limited', resumeAt: setup.clock.now + 60_000 });
+		setup.bot.requestReview(id);
+		await setup.settle();
+
+		expect(setup.statusOf(7)?.status).toBe('queued');
+		expect(setup.bot.getState().usageLimitedUntil).toBe(setup.clock.now + 60_000);
+		expect(storedRepairFields(setup, id)).toEqual({ sessionId: 'session-1', headSha: 'head-1' });
+	});
+
+	it('usage limit during a saved-session repair → requeued, the session is kept, no full review', async () => {
+		const { setup, id } = await startManualReview();
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.bot.requestReview(id);
+		await setup.settle();
+		setup.claude.repairOutcomes.push({ kind: 'setup_broken', message: 'Not logged in' });
+		setup.bot.requestReview(id);
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.statusOf(7)?.status).toBe('queued');
+		expect(storedRepairFields(setup, id)).toEqual({ sessionId: 'session-1', headSha: 'head-1' });
+	});
+
+	it('a repair that times out or finds no conversation → stops retrying at once', async () => {
+		const { setup, id } = await startManualReview();
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.claude.repairOutcomes.push({
+			kind: 'failed',
+			summary: 'Claude exited 1 without a result: No conversation found with session ID',
+		});
+		setup.bot.requestReview(id);
+		await setup.settle();
+
+		expect(setup.claude.repairCalls).toHaveLength(1);
+		expect(setup.statusOf(7)?.reason).toBe(
+			'Claude finished but never returned the review (repair stopped: Claude exited 1 without a result: No conversation found with session ID)',
+		);
+	});
+
+	it('Stop during saved-session repairs → no full review is started', async () => {
+		const { setup, id } = await startManualReview();
+		const gate = createGate();
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.bot.requestReview(id);
+		await setup.settle();
+		setup.claude.repairGate = gate.promise;
+		setup.bot.requestReview(id);
+		await waitUntil(() => setup.claude.repairCalls.length === 2);
+		setup.bot.stop(id);
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.claude.abortedRepairs).toBe(1);
+		expect(setup.statusOf(7)?.status).toBe('stopped');
+	});
+
+	it('Stop clears the saved session', async () => {
+		const { setup, id } = await startManualReview();
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.bot.requestReview(id);
+		await setup.settle();
+		setup.bot.stop(id);
+
+		expect(storedRepairFields(setup, id)).toEqual({ sessionId: null, headSha: null });
+	});
+
+	it('a saved session older than 24 hours → not resumed, a full review runs', async () => {
+		const { setup, id } = await startManualReview();
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.bot.requestReview(id);
+		await setup.settle();
+		setup.clock.now += SAVED_SESSION_MAX_AGE_MS + 1;
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.bot.requestReview(id);
+		await setup.settle();
+
+		expect(setup.claude.repairCalls).toHaveLength(1);
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+		expect(storedRepairFields(setup, id)).toEqual({ sessionId: null, headSha: null });
+	});
+
+	it('auto mode: a repaired result is held as a draft, not posted', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+
+		setup.github.addPullRequest(7);
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.claude.repairOutcomes.push(draftedFor('head-1', 'approve'));
+		await setup.tickAndSettle();
+
+		expect(setup.github.submissions).toEqual([]);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+	});
+
+	it('auto mode with auto-approve on: a repaired approving result is held as a draft, nothing posted', async () => {
+		const setup = setUp({ reviewMode: 'auto', autoApprove: 'on' });
+
+		setup.github.addPullRequest(7);
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.claude.repairOutcomes.push(draftedFor('head-1', 'approve'));
+		await setup.tickAndSettle();
+
+		expect(setup.github.submissions).toEqual([]);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+	});
+
+	it('auto mode: a result recovered from the text fallback is held as a draft, not posted', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+
+		setup.github.addPullRequest(7);
+		setup.claude.reviewOutcomes.push({ ...draftedFor('head-1', 'comment'), isRecovered: true });
+		await setup.tickAndSettle();
+
+		expect(setup.github.submissions).toEqual([]);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+	});
+
+	it('a failure with no session to resume (e.g. a timeout) → no repair attempted', async () => {
+		const { setup, id } = await startManualReview();
+
+		setup.claude.reviewOutcomes.push({ kind: 'failed', summary: 'Claude run timed out' });
+		setup.bot.requestReview(id);
+		await setup.settle();
+
+		expect(setup.claude.repairCalls).toEqual([]);
+		expect(setup.statusOf(7)?.reason).toBe('Claude run timed out');
 	});
 });
 

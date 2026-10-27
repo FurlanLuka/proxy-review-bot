@@ -1,6 +1,10 @@
 import { buildHistory } from '../history/history.js';
 import type { HistoryEntry } from '../history/history.js';
-import { buildReviewCycleReset, firstQueuedAtFor } from '../review/pull-request-updates.js';
+import {
+	buildReviewCycleReset,
+	CLEARED_REPAIR_SESSION,
+	firstQueuedAtFor,
+} from '../review/pull-request-updates.js';
 import type { ReviewProgress } from '../review/review-progress.js';
 import type { PullRequestUpdate, TrackedPullRequest } from '../tracking/tracking-types.js';
 import { approvePullRequest, discardDraft, findHeldDraft, postEditedDraft } from './approval.js';
@@ -342,7 +346,12 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 
 			return result;
 		},
-		stop: (id) => applyManualAction(id, { status: 'stopped', pendingApproval: null }),
+		stop: (id) =>
+			applyManualAction(id, {
+				status: 'stopped',
+				pendingApproval: null,
+				...CLEARED_REPAIR_SESSION,
+			}),
 		approve,
 		getDraft: (id) => findHeldDraft(dependencies, id),
 		postDraft: (id, edit) =>

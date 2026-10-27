@@ -23,7 +23,7 @@ describe('store', () => {
 			version: number;
 		};
 
-		expect(version.version).toBe(8);
+		expect(version.version).toBe(11);
 	});
 
 	it('upgrading an existing database marks reviewed PRs as started and leaves new ones alone', () => {
@@ -32,6 +32,9 @@ describe('store', () => {
 		migrate(database);
 		database.run('DELETE FROM schema_migrations WHERE version > 6');
 		database.run('ALTER TABLE tracked_pull_requests DROP COLUMN first_queued_at');
+		database.run('ALTER TABLE tracked_pull_requests DROP COLUMN repair_session_id');
+		database.run('ALTER TABLE tracked_pull_requests DROP COLUMN repair_head_sha');
+		database.run('ALTER TABLE tracked_pull_requests DROP COLUMN repair_saved_at');
 
 		const insert = (number: number, status: string, rounds: number) => {
 			database.run(

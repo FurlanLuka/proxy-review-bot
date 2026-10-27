@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { ANCHOR_TIME, makeDraft, makeLive, makeTracked } from '../test-support/factories.js';
 import {
+	CLEARED_REPAIR_SESSION,
 	buildActionUpdate,
 	buildLiveUpdate,
 	buildPostingUpdate,
@@ -67,6 +68,7 @@ describe('buildActionUpdate', () => {
 	it('reopen → a fresh review cycle that ignores older reviews', () => {
 		expect(buildActionUpdate({ kind: 'reopen' }, tracked, ANCHOR_TIME)).toEqual({
 			...buildReviewCycleReset(ANCHOR_TIME),
+			...CLEARED_REPAIR_SESSION,
 			status: 'needs_review',
 			firstQueuedAt: tracked.firstQueuedAt,
 		});
@@ -79,6 +81,41 @@ describe('buildActionUpdate', () => {
 
 		expect(buildActionUpdate({ kind: 'reopen' }, gaveUp, ANCHOR_TIME)?.firstQueuedAt).toBe(5);
 		expect(buildActionUpdate({ kind: 'reopen' }, stopped, ANCHOR_TIME)?.firstQueuedAt).toBeNull();
+	});
+
+	it('finish, take over and reopen → the saved repair session is cleared', () => {
+		const withSession = makeTracked({
+			repairSessionId: 'session-1',
+			repairHeadSha: 'head-1',
+			repairSavedAt: 5,
+		});
+
+		for (const action of [
+			{ kind: 'finish' as const, reason: 'merged' as const },
+			{ kind: 'take_over' as const },
+			{ kind: 'reopen' as const },
+		]) {
+			expect(buildActionUpdate(action, withSession, ANCHOR_TIME)).toMatchObject(
+				CLEARED_REPAIR_SESSION,
+			);
+		}
+	});
+
+	it('give up keeps the saved repair session, so Review Again can still resume it', () => {
+		const withSession = makeTracked({
+			repairSessionId: 'session-1',
+			repairHeadSha: 'head-1',
+			repairSavedAt: 5,
+		});
+		const update = buildActionUpdate(
+			{ kind: 'give_up', reason: 'Review failed 2 times on this commit' },
+			withSession,
+			ANCHOR_TIME,
+		);
+
+		expect(update).not.toHaveProperty('repairSessionId');
+		expect(update).not.toHaveProperty('repairHeadSha');
+		expect(update).not.toHaveProperty('repairSavedAt');
 	});
 
 	it('enqueue marks the review started the first time only', () => {

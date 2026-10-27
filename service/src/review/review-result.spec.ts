@@ -4,6 +4,7 @@ import { ANCHOR_TIME, makeDraft } from '../test-support/factories.js';
 import envelopeFixture from './fixtures/claude-envelope-success.json';
 import { REVIEW_SYSTEM_PROMPT } from '../claude/prompts.js';
 import {
+	extractTrailingJsonObject,
 	parseClaudeOutput,
 	REPLY_RESULT_SCHEMA,
 	REVIEW_RESULT_JSON_SCHEMA,
@@ -255,11 +256,16 @@ describe('error detection on stream-json output', () => {
 });
 
 describe('what the bot asks Claude for', () => {
-	it('the JSON schema asks only for what the parser requires; the prompt lists required fields per outcome', () => {
+	it('the JSON schema always asks for filing and headRefOid, which a drafted review needs; the prompt lists required fields per outcome', () => {
 		const commentItems = REVIEW_RESULT_JSON_SCHEMA.properties.comments.items;
 
 		expect(commentItems.required).toEqual(['path', 'line', 'body']);
-		expect(REVIEW_RESULT_JSON_SCHEMA.required).toEqual(['outcome', 'summary']);
+		expect(REVIEW_RESULT_JSON_SCHEMA.required).toEqual([
+			'outcome',
+			'summary',
+			'filing',
+			'headRefOid',
+		]);
 		expect(REVIEW_SYSTEM_PROMPT).toContain('"drafted": outcome, filing, headRefOid, summary.');
 		expect(
 			parseReview(
@@ -272,6 +278,22 @@ describe('what the bot asks Claude for', () => {
 				}),
 			),
 		).toMatchObject({ kind: 'result', result: { comments: [{ side: 'RIGHT' }] } });
+	});
+
+	it('every outcome still parses with the always-required filing and headRefOid filled in', () => {
+		const alwaysRequired = { filing: 'comment', headRefOid: 'h' };
+
+		expect(
+			parseReview(
+				envelopeWith({ outcome: 'blocked', reason: 'other', summary: 's', ...alwaysRequired }),
+			).kind,
+		).toBe('result');
+		expect(
+			parseReview(envelopeWith({ outcome: 'failed', summary: 's', ...alwaysRequired })).kind,
+		).toBe('result');
+		expect(
+			parseReview(envelopeWith({ outcome: 'nothing_new', summary: 's', ...alwaysRequired })).kind,
+		).toBe('result');
 	});
 
 	const MINIMAL_RESULTS: Record<string, Record<string, unknown>> = {
@@ -295,4 +317,157 @@ describe('what the bot asks Claude for', () => {
 			}
 		});
 	}
+});
+
+describe('extractTrailingJsonObject', () => {
+	it('an object that ends the text → that object', () => {
+		expect(extractTrailingJsonObject('Here is the result: {"outcome":"drafted","a":1}\n')).toEqual({
+			outcome: 'drafted',
+			a: 1,
+		});
+	});
+
+	it('a fenced block that ends the text → its object', () => {
+		expect(extractTrailingJsonObject('Done.\n```json\n{"outcome":"nothing_new"}\n```\n')).toEqual({
+			outcome: 'nothing_new',
+		});
+	});
+
+	it('an earlier ```json example followed by prose → rejected', () => {
+		const text = 'Example:\n```json\n{"outcome":"drafted"}\n```\nI showed the draft above.';
+
+		expect(extractTrailingJsonObject(text)).toBeUndefined();
+	});
+
+	it('a stray brace in prose → rejected', () => {
+		expect(
+			extractTrailingJsonObject('Use {braces} carefully, the review is above.'),
+		).toBeUndefined();
+		expect(extractTrailingJsonObject('The map looks like {a: 1}')).toBeUndefined();
+	});
+
+	it('a stray brace earlier in the prose, then a valid trailing object → that object', () => {
+		const text = 'Use the `{` key to open a block.\n```json\n{"outcome":"drafted","a":1}\n```';
+
+		expect(extractTrailingJsonObject(text)).toEqual({ outcome: 'drafted', a: 1 });
+	});
+
+	it('an unbalanced quote earlier in the prose, then a valid trailing object → that object', () => {
+		const text = 'The flag is "--force and it breaks.\n{"outcome":"nothing_new","b":2}';
+
+		expect(extractTrailingJsonObject(text)).toEqual({ outcome: 'nothing_new', b: 2 });
+	});
+
+	it('quotes and braces inside strings are handled', () => {
+		expect(extractTrailingJsonObject('x {"outcome":"drafted","note":"a } and \\" here"}')).toEqual({
+			outcome: 'drafted',
+			note: 'a } and " here',
+		});
+	});
+
+	it('a trailing blocked or failed outcome → rejected (never accepted via the fallback)', () => {
+		expect(
+			extractTrailingJsonObject('e.g. {"outcome":"blocked","reason":"other","summary":"x"}'),
+		).toBeUndefined();
+		expect(extractTrailingJsonObject('{"outcome":"failed","summary":"x"}')).toBeUndefined();
+	});
+});
+
+describe('parseClaudeOutput without structured_output', () => {
+	const textEnvelope = (result: string): string => {
+		return JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result });
+	};
+
+	const parseWithFallback = (stdout: string) => {
+		return parseClaudeOutput({
+			output: output(stdout),
+			schema: REVIEW_RESULT_SCHEMA,
+			now: ANCHOR_TIME,
+			allowTextFallback: true,
+		});
+	};
+
+	it('a review whose result JSON ends the chat reply → parsed and marked recovered', () => {
+		const draft = makeDraft();
+		const result = `Here is my review.\n\n\`\`\`json\n${JSON.stringify(draft)}\n\`\`\``;
+
+		expect(parseWithFallback(textEnvelope(result))).toEqual({
+			kind: 'result',
+			result: draft,
+			isRecovered: true,
+		});
+	});
+
+	it('the same text without the fallback (replies) → failed', () => {
+		const result = `Here is my review.\n${JSON.stringify(makeDraft())}`;
+
+		expect(parseReview(textEnvelope(result)).kind).toBe('failed');
+	});
+
+	it('a trailing object that fails the schema → failed', () => {
+		expect(parseWithFallback(textEnvelope('Result: {"outcome":"drafted"}')).kind).toBe('failed');
+	});
+
+	const SESSION = '0f8fad5b-d9cb-469f-a165-70867728950e';
+	const STOP_CASES: [string, ReturnType<typeof output>][] = [
+		[
+			'"No conversation found" on stderr, no envelope',
+			output('', { exitCode: 1, stderr: `No conversation found with session ID: ${SESSION}` }),
+		],
+		[
+			'an is_error envelope that carries a session_id',
+			output(
+				JSON.stringify({
+					type: 'result',
+					subtype: 'success',
+					is_error: true,
+					result: 'API Error: 500',
+					session_id: SESSION,
+				}),
+			),
+		],
+		['a timed-out run', output('', { isTimedOut: true })],
+		[
+			'a non-success subtype',
+			output(
+				JSON.stringify({
+					type: 'result',
+					subtype: 'error_max_turns',
+					is_error: false,
+					session_id: SESSION,
+				}),
+			),
+		],
+	];
+
+	for (const [name, stopOutput] of STOP_CASES) {
+		it(`${name} → failed with no schema issues and no session, so a repair is not retried`, () => {
+			const outcome = parseClaudeOutput({
+				output: stopOutput,
+				schema: REVIEW_RESULT_SCHEMA,
+				now: ANCHOR_TIME,
+				allowTextFallback: true,
+			});
+
+			expect(outcome.kind).toBe('failed');
+			expect(outcome).not.toHaveProperty('schemaIssues');
+			expect(outcome).not.toHaveProperty('repairSessionId');
+		});
+	}
+
+	it('only prose → failed with diagnostics and the raw envelope kept', () => {
+		const envelope = textEnvelope('I showed the draft above.');
+
+		expect(parseWithFallback(envelope)).toMatchObject({
+			kind: 'failed',
+			schemaIssues: ['result: Required'],
+			diagnostics: {
+				subtype: 'success',
+				hasStructuredOutput: false,
+				resultLength: 25,
+				resultPreview: 'I showed the draft above.',
+			},
+			rawEnvelope: envelope,
+		});
+	});
 });

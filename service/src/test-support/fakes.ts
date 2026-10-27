@@ -162,6 +162,10 @@ export const createFakeGitHub = (clock: { now: number }): FakeGitHub => {
 
 export interface FakeClaude extends ClaudeClient {
 	reviewOutcomes: ClaudeRunOutcome<ReviewResult>[];
+	repairOutcomes: ClaudeRunOutcome<ReviewResult>[];
+	repairCalls: { sessionId: string; clonePath: string; attempt: number }[];
+	repairGate: Promise<void> | null;
+	abortedRepairs: number;
 	replyOutcomes: ClaudeRunOutcome<ReplyResult>[];
 	reviewCalls: string[];
 	replyPrompts: string[];
@@ -235,6 +239,10 @@ export const createFakeClaude = (): FakeClaude => {
 			return waiter.promise;
 		},
 		reviewOutcomes: [],
+		repairOutcomes: [],
+		repairCalls: [],
+		repairGate: null,
+		abortedRepairs: 0,
 		replyOutcomes: [],
 		reviewCalls: [],
 		replyPrompts: [],
@@ -246,6 +254,26 @@ export const createFakeClaude = (): FakeClaude => {
 		reviewProgressLines: [],
 		replyGate: null,
 		replyError: null,
+		runRepair: async ({ sessionId, clonePath, attempt, signal }) => {
+			fake.repairCalls.push({ sessionId, clonePath, attempt });
+
+			const aborted = Promise.withResolvers<'aborted'>();
+
+			signal?.addEventListener('abort', () => aborted.resolve('aborted'), { once: true });
+
+			if (
+				(await Promise.race([fake.repairGate, aborted.promise])) === 'aborted' ||
+				signal?.aborted
+			) {
+				fake.abortedRepairs += 1;
+
+				return { kind: 'failed', summary: 'Claude exited null without a result' };
+			}
+
+			return (
+				fake.repairOutcomes.shift() ?? { kind: 'failed', summary: 'no fake repair outcome queued' }
+			);
+		},
 		runReview: (params) => {
 			if (fake.reviewSyncError !== null) {
 				throw fake.reviewSyncError;
@@ -336,6 +364,7 @@ export const createTestHarness = (): TestHarness => {
 		}),
 		logger: createSilentLogger(),
 		now: () => clock.now,
+		sleep: () => Promise.resolve(),
 	};
 
 	return { clock, readiness, github, claude, clones, dependencies };

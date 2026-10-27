@@ -59,8 +59,15 @@ export const REVIEW_RESULT_JSON_SCHEMA = {
 	type: 'object',
 	properties: {
 		outcome: { type: 'string', enum: ['drafted', 'nothing_new', 'blocked', 'failed'] },
-		filing: { type: 'string', enum: ['approve', 'comment'] },
-		headRefOid: stringProperty,
+		filing: {
+			type: 'string',
+			enum: ['approve', 'comment'],
+			description: 'The filing for a drafted review. Use "comment" for any other outcome.',
+		},
+		headRefOid: {
+			type: 'string',
+			description: 'The PR head commit you reviewed. Always fill it in.',
+		},
 		baseRefName: stringProperty,
 		targetTipOid: stringProperty,
 		summary: stringProperty,
@@ -92,7 +99,7 @@ export const REVIEW_RESULT_JSON_SCHEMA = {
 			enum: ['snapshot_unstable', 'diff_mismatch', 'missing_access', 'other'],
 		},
 	},
-	required: ['outcome', 'summary'],
+	required: ['outcome', 'summary', 'filing', 'headRefOid'],
 };
 
 export const REPLY_RESULT_JSON_SCHEMA = {
@@ -107,13 +114,38 @@ const ENVELOPE_SCHEMA = z.object({
 	is_error: z.boolean(),
 	result: z.string().optional(),
 	structured_output: z.unknown().optional(),
+	num_turns: z.number().optional(),
+	stop_reason: z.string().nullable().optional(),
+	terminal_reason: z.string().nullable().optional(),
+	session_id: z.string().optional(),
 });
 
+type ClaudeEnvelope = z.infer<typeof ENVELOPE_SCHEMA>;
+
+const RESULT_PREVIEW_LENGTH = 500;
+
+export interface ResultDiagnostics {
+	subtype: string;
+	numTurns: number | null;
+	stopReason: string | null;
+	terminalReason: string | null;
+	hasStructuredOutput: boolean;
+	resultLength: number;
+	resultPreview: string;
+}
+
 export type ClaudeRunOutcome<Result> =
-	| { kind: 'result'; result: Result }
+	| { kind: 'result'; result: Result; isRecovered?: boolean }
 	| { kind: 'usage_limited'; resumeAt: number }
 	| { kind: 'setup_broken'; message: string }
-	| { kind: 'failed'; summary: string; schemaIssues?: string[] };
+	| {
+			kind: 'failed';
+			summary: string;
+			schemaIssues?: string[];
+			diagnostics?: ResultDiagnostics;
+			rawEnvelope?: string;
+			repairSessionId?: string;
+	  };
 
 export interface ClaudeProcessOutput {
 	exitCode: number | null;
@@ -145,7 +177,12 @@ const detectUsageLimit = (text: string, now: number): number | null => {
 	return rawTimestamp.length === 10 ? timestamp * 1000 : timestamp;
 };
 
-const parseEnvelopeLine = (line: string): z.infer<typeof ENVELOPE_SCHEMA> | null => {
+interface ParsedEnvelope {
+	envelope: ClaudeEnvelope;
+	line: string;
+}
+
+const parseEnvelopeLine = (line: string): ClaudeEnvelope | null => {
 	try {
 		const parsed = ENVELOPE_SCHEMA.safeParse(JSON.parse(line));
 
@@ -155,18 +192,107 @@ const parseEnvelopeLine = (line: string): z.infer<typeof ENVELOPE_SCHEMA> | null
 	}
 };
 
-const parseEnvelope = (stdout: string): z.infer<typeof ENVELOPE_SCHEMA> | null => {
+const parseEnvelope = (stdout: string): ParsedEnvelope | null => {
 	const lines = stdout.trim().split('\n').reverse();
 
 	for (const line of lines) {
 		const envelope = parseEnvelopeLine(line);
 
 		if (envelope !== null) {
-			return envelope;
+			return { envelope, line };
 		}
 	}
 
 	return null;
+};
+
+const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export const isSessionId = (value: unknown): value is string => {
+	return typeof value === 'string' && SESSION_ID_PATTERN.test(value);
+};
+
+export const readSessionIdFromLine = (line: string): string | null => {
+	try {
+		const event = JSON.parse(line) as { type?: unknown; session_id?: unknown };
+
+		return event.type === 'system' && isSessionId(event.session_id) ? event.session_id : null;
+	} catch {
+		return null;
+	}
+};
+
+const findSessionId = (stdout: string): string | undefined => {
+	for (const line of stdout.split('\n')) {
+		const sessionId = readSessionIdFromLine(line);
+
+		if (sessionId !== null) {
+			return sessionId;
+		}
+	}
+
+	return undefined;
+};
+
+const parseJson = (text: string): unknown => {
+	try {
+		return JSON.parse(text);
+	} catch {
+		return undefined;
+	}
+};
+
+const TRAILING_AFTER_OBJECT = /^\s*(```)?\s*$/;
+const FALLBACK_REJECTED_OUTCOMES = new Set(['blocked', 'failed']);
+
+const parseObjectEndingAt = (text: string, end: number): object | undefined => {
+	for (
+		let start = text.indexOf('{');
+		start !== -1 && start < end;
+		start = text.indexOf('{', start + 1)
+	) {
+		const parsed = parseJson(text.slice(start, end));
+
+		if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+			return parsed;
+		}
+	}
+
+	return undefined;
+};
+
+export const extractTrailingJsonObject = (text: string): unknown => {
+	const lastBrace = text.lastIndexOf('}');
+
+	if (lastBrace === -1 || !TRAILING_AFTER_OBJECT.test(text.slice(lastBrace + 1))) {
+		return undefined;
+	}
+
+	const parsed = parseObjectEndingAt(text, lastBrace + 1);
+
+	if (parsed === undefined) {
+		return undefined;
+	}
+
+	const outcome = (parsed as { outcome?: unknown }).outcome;
+
+	return typeof outcome === 'string' && FALLBACK_REJECTED_OUTCOMES.has(outcome)
+		? undefined
+		: parsed;
+};
+
+const buildDiagnostics = (envelope: ClaudeEnvelope): ResultDiagnostics => {
+	const resultText = envelope.result ?? '';
+
+	return {
+		subtype: envelope.subtype,
+		numTurns: envelope.num_turns ?? null,
+		stopReason: envelope.stop_reason ?? null,
+		terminalReason: envelope.terminal_reason ?? null,
+		hasStructuredOutput: envelope.structured_output !== undefined,
+		resultLength: resultText.length,
+		resultPreview: resultText.slice(0, RESULT_PREVIEW_LENGTH),
+	};
 };
 
 const describeSchemaIssues = (error: z.ZodError): string[] => {
@@ -177,16 +303,29 @@ const describeSchemaIssues = (error: z.ZodError): string[] => {
 	});
 };
 
-const readStructuredOutput = (envelope: z.infer<typeof ENVELOPE_SCHEMA>): unknown => {
+interface StructuredOutputRead {
+	value: unknown;
+	isFromTextFallback: boolean;
+}
+
+const readStructuredOutput = (
+	envelope: ClaudeEnvelope,
+	allowTextFallback: boolean,
+): StructuredOutputRead => {
 	if (envelope.structured_output !== undefined) {
-		return envelope.structured_output;
+		return { value: envelope.structured_output, isFromTextFallback: false };
 	}
 
-	try {
-		return JSON.parse(envelope.result ?? '');
-	} catch {
-		return undefined;
+	const resultText = envelope.result ?? '';
+	const exact = parseJson(resultText);
+
+	if (exact !== undefined || !allowTextFallback) {
+		return { value: exact, isFromTextFallback: false };
 	}
+
+	const fallback = extractTrailingJsonObject(resultText);
+
+	return { value: fallback, isFromTextFallback: fallback !== undefined };
 };
 
 const isJsonLine = (line: string): boolean => {
@@ -199,10 +338,7 @@ const isJsonLine = (line: string): boolean => {
 	}
 };
 
-const buildErrorText = (
-	envelope: z.infer<typeof ENVELOPE_SCHEMA> | null,
-	output: ClaudeProcessOutput,
-): string => {
+const buildErrorText = (envelope: ClaudeEnvelope | null, output: ClaudeProcessOutput): string => {
 	if (envelope !== null) {
 		return envelope.is_error ? `${envelope.result ?? ''}\n${output.stderr}` : '';
 	}
@@ -216,19 +352,21 @@ interface ParseClaudeOutputParams<Result> {
 	output: ClaudeProcessOutput;
 	schema: z.ZodType<Result, z.ZodTypeDef, unknown>;
 	now: number;
+	allowTextFallback?: boolean;
 }
 
 export const parseClaudeOutput = <Result>({
 	output,
 	schema,
 	now,
+	allowTextFallback = false,
 }: ParseClaudeOutputParams<Result>): ClaudeRunOutcome<Result> => {
 	if (output.isTimedOut) {
 		return { kind: 'failed', summary: 'Claude run timed out' };
 	}
 
-	const envelope = parseEnvelope(output.stdout);
-	const errorText = buildErrorText(envelope, output);
+	const parsedEnvelope = parseEnvelope(output.stdout);
+	const errorText = buildErrorText(parsedEnvelope?.envelope ?? null, output);
 	const usageLimitedUntil = detectUsageLimit(errorText, now);
 
 	if (usageLimitedUntil !== null) {
@@ -239,21 +377,26 @@ export const parseClaudeOutput = <Result>({
 		return { kind: 'setup_broken', message: errorText.trim().slice(0, 300) };
 	}
 
-	if (envelope === null) {
+	if (parsedEnvelope === null) {
 		return {
 			kind: 'failed',
 			summary: `Claude exited ${output.exitCode} without a result: ${output.stderr.trim().slice(0, 200)}`,
 		};
 	}
 
+	const { envelope, line } = parsedEnvelope;
+
 	if (envelope.is_error || envelope.subtype !== 'success') {
 		return { kind: 'failed', summary: `Claude run ended with ${envelope.subtype}` };
 	}
 
-	const parsed = schema.safeParse(readStructuredOutput(envelope));
+	const structuredOutput = readStructuredOutput(envelope, allowTextFallback);
+	const parsed = schema.safeParse(structuredOutput.value);
 
 	if (parsed.success) {
-		return { kind: 'result', result: parsed.data };
+		return structuredOutput.isFromTextFallback
+			? { kind: 'result', result: parsed.data, isRecovered: true }
+			: { kind: 'result', result: parsed.data };
 	}
 
 	const schemaIssues = describeSchemaIssues(parsed.error);
@@ -262,5 +405,10 @@ export const parseClaudeOutput = <Result>({
 		kind: 'failed',
 		summary: `Claude's result had the wrong shape (${schemaIssues.slice(0, 3).join('; ')})`,
 		schemaIssues,
+		diagnostics: buildDiagnostics(envelope),
+		rawEnvelope: line,
+		repairSessionId: isSessionId(envelope.session_id)
+			? envelope.session_id
+			: findSessionId(output.stdout),
 	};
 };

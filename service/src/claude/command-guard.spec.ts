@@ -121,12 +121,46 @@ describe('buildClaudeArgs', () => {
 		return args[args.indexOf(flag) + 1];
 	};
 
-	it('runs headless with JSON output, the schema and no session persistence', () => {
+	it('runs headless with JSON output and the schema, keeping the review session for repairs', () => {
 		expect(reviewArgs[0]).toBe('-p');
 		expect(valueAfter(reviewArgs, '--output-format')).toBe('stream-json');
 		expect(reviewArgs).toContain('--verbose');
 		expect(valueAfter(reviewArgs, '--json-schema')).toBe('{"type":"object"}');
-		expect(reviewArgs).toContain('--no-session-persistence');
+		expect(reviewArgs).not.toContain('--no-session-persistence');
+		expect(reviewArgs).not.toContain('--resume');
+	});
+
+	it('replies keep no session; a repair resumes the given session', () => {
+		const replyArgs = buildClaudeArgs({
+			kind: 'reply',
+			prompt: 'answer',
+			systemPrompt: 'contract',
+			jsonSchema: { type: 'object' },
+		});
+		const repairArgs = buildClaudeArgs({
+			kind: 'review',
+			prompt: 'return the result',
+			systemPrompt: 'contract',
+			jsonSchema: { type: 'object' },
+			resumeSessionId: 'session-1',
+		});
+
+		expect(replyArgs).toContain('--no-session-persistence');
+		expect(valueAfter(repairArgs, '--resume')).toBe('session-1');
+		expect(valueAfter(repairArgs, '--json-schema')).toBe('{"type":"object"}');
+		expect(valueAfter(repairArgs, '--allowedTools')).toBe('Read,Grep,Glob,Bash(git:*),Bash(gh:*)');
+		expect(valueAfter(repairArgs, '--disallowedTools')?.split(',')).toEqual([
+			'Edit',
+			'Write',
+			'NotebookEdit',
+			'WebFetch',
+			'WebSearch',
+			'Task',
+			'Agent',
+			'Skill',
+		]);
+		expect(repairArgs).not.toContain('--no-session-persistence');
+		expect(repairArgs).toContain('--setting-sources');
 	});
 
 	it('loads only user settings so PR-author hooks never run', () => {

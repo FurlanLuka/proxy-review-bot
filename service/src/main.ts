@@ -90,6 +90,7 @@ const bot = createBot({
 	claude: createClaudeClient({
 		claudePath: claudePath ?? 'claude',
 		shimDirectory,
+		failedResultsDirectory: join(dataDirectory, 'failed-results'),
 		runCommand,
 		logger,
 		baseEnv,
@@ -116,6 +117,7 @@ const bot = createBot({
 	},
 	logger,
 	now: Date.now,
+	sleep: (milliseconds) => Bun.sleep(milliseconds),
 });
 
 const server = Bun.serve({
