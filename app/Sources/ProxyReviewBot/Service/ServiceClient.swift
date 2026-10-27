@@ -26,6 +26,12 @@ struct ServiceClient: Sendable {
         _ = try await send(method: action.method, path: action.path, body: action.encodedBody())
     }
 
+    func addPullRequest(url: String) async throws -> AddPullRequestResponse {
+        let action = ServiceAction.addPullRequest(url: url)
+        let data = try await send(method: action.method, path: action.path, body: action.encodedBody())
+        return try JSONDecoder().decode(AddPullRequestResponse.self, from: data)
+    }
+
     func fetchDraft(pullRequestID: Int) async throws -> ReviewDraft {
         let action = ServiceAction.fetchDraft(pullRequestID: pullRequestID)
         let data = try await send(method: action.method, path: action.path)

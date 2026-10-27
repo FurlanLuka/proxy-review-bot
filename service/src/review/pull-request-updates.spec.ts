@@ -6,6 +6,7 @@ import {
 	buildLiveUpdate,
 	buildPostingUpdate,
 	buildReviewCycleReset,
+	planLinkedAdd,
 } from './pull-request-updates.js';
 import { RETRY_BACKOFF_MS } from './review-decisions.js';
 
@@ -159,5 +160,64 @@ describe('buildLiveUpdate', () => {
 				now: 99,
 			}),
 		).toMatchObject({ headChangedAt: 99, isRequested: false, headSha: 'head-2' });
+	});
+});
+
+describe('planLinkedAdd', () => {
+	const plan = (existing: ReturnType<typeof makeTracked> | null, isDraft = false) => {
+		return planLinkedAdd({
+			existing,
+			live: makeLive({ isDraft }),
+			isRequested: false,
+			now: ANCHOR_TIME,
+		});
+	};
+
+	it('nothing tracked → inserted, no update', () => {
+		expect(plan(null)).toEqual({ outcome: 'inserted', update: null });
+	});
+
+	it.each(['done', 'stopped', 'needs_you', 'blocked'] as const)(
+		'%s → requeued: a fresh cycle, started now, marked as a link PR',
+		(status) => {
+			const result = plan(
+				makeTracked({ status, rounds: 4, firstQueuedAt: 1, repairSessionId: 'old-session' }),
+			);
+
+			expect(result.outcome).toBe('requeued');
+			expect(result.update).toMatchObject({
+				status: 'queued',
+				rounds: 0,
+				trackedSince: ANCHOR_TIME,
+				firstQueuedAt: ANCHOR_TIME,
+				source: 'link',
+				isRequested: false,
+				...CLEARED_REPAIR_SESSION,
+			});
+		},
+	);
+
+	it('a draft PR requeued → waits in needs_review instead of queued', () => {
+		expect(plan(makeTracked({ status: 'done' }), true).update).toMatchObject({
+			status: 'needs_review',
+			isDraft: true,
+		});
+	});
+
+	it('needs_review → started, keeping an earlier start time', () => {
+		const result = plan(makeTracked({ status: 'needs_review', firstQueuedAt: 123 }));
+
+		expect(result.outcome).toBe('started');
+		expect(result.update).toMatchObject({ status: 'queued', firstQueuedAt: 123 });
+	});
+
+	it.each([
+		'queued',
+		'reviewing',
+		'waiting_on_author',
+		'draft_ready',
+		'awaiting_approval',
+	] as const)('%s → existing, left alone', (status) => {
+		expect(plan(makeTracked({ status }))).toEqual({ outcome: 'existing', update: null });
 	});
 });

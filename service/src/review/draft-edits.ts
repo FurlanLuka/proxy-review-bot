@@ -52,12 +52,16 @@ interface ApplyDraftEditsParams {
 	draft: DraftedReviewResult;
 	draftHeadSha: string;
 	candidate: unknown;
+	isOwn: boolean;
 }
+
+export const OWN_PULL_REQUEST_REASON = 'you can only comment on your own PR';
 
 export const applyDraftEdits = ({
 	draft,
 	draftHeadSha,
 	candidate,
+	isOwn,
 }: ApplyDraftEditsParams): DraftEditResult => {
 	const parsed = DRAFT_EDIT_SCHEMA.safeParse(candidate);
 
@@ -73,6 +77,10 @@ export const applyDraftEdits = ({
 
 	const knownAnchors = new Set(draft.comments.map(anchorKey));
 	const knownFilePaths = new Set(draft.fileComments.map((comment) => comment.path));
+
+	if (isOwn && edit.event !== 'COMMENT') {
+		return { kind: 'invalid', reason: OWN_PULL_REQUEST_REASON };
+	}
 
 	if (edit.event === 'APPROVE' && draft.filing !== 'approve') {
 		return { kind: 'invalid', reason: 'this draft cannot approve' };

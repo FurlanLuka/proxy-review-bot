@@ -24,6 +24,8 @@ export const makeTracked = (overrides: Partial<TrackedPullRequest> = {}): Tracke
 	additions: 10,
 	deletions: 2,
 	isRequested: true,
+	isDraft: false,
+	source: 'requested',
 	lastReviewedHead: null,
 	lastAttemptedHead: null,
 	attemptsForHead: 0,

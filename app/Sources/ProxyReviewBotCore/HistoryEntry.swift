@@ -51,7 +51,13 @@ public struct HistoryEntry: Codable, Equatable, Identifiable, Sendable {
     }
 
     public var subtitle: String {
-        "\(repo) #\(number) · @\(author)"
+        subtitle(viewerLogin: nil)
+    }
+
+    public func subtitle(viewerLogin: String?) -> String {
+        let isOwn = viewerLogin.map { $0.caseInsensitiveCompare(author) == .orderedSame } ?? false
+
+        return "\(repo) #\(number) · \(isOwn ? "you" : "@\(author)")"
     }
 
     public var roundsText: String {

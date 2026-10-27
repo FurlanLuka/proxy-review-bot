@@ -3050,3 +3050,350 @@ describe('worktree release', () => {
 		});
 	});
 });
+
+describe('adding a PR by link', () => {
+	const linkTo = (number: number) => `https://github.com/acme/api/pull/${number}`;
+
+	const setUpWithViewer = async (settings = {}) => {
+		const setup = setUp(settings);
+
+		await setup.tickAndSettle();
+
+		return setup;
+	};
+
+	const addOtherPullRequest = (setup: ReturnType<typeof setUp>, number: number, overrides = {}) => {
+		const entry = setup.github.addPullRequest(number, overrides);
+
+		entry.isRequested = false;
+
+		return entry;
+	};
+
+	it('a PR nobody requested you on → tracked as a link PR and reviewed right away', async () => {
+		const setup = await setUpWithViewer({ reviewMode: 'manual' });
+
+		addOtherPullRequest(setup, 7);
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+
+		const result = await setup.bot.addPullRequest(linkTo(7));
+
+		await setup.settle();
+
+		expect(result).toMatchObject({ kind: 'added', isExisting: false });
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.statusOf(7)).toMatchObject({
+			status: 'draft_ready',
+			source: 'link',
+			isStarted: true,
+			isOwn: false,
+		});
+		expect(setup.dependencies.store.getPullRequest(setup.statusOf(7)?.id ?? 0)?.isRequested).toBe(
+			false,
+		);
+	});
+
+	it('a link PR you are never requested on → kept and re-reviewed when new commits land', async () => {
+		const setup = await setUpWithViewer({ reviewMode: 'auto' });
+
+		addOtherPullRequest(setup, 7);
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.bot.addPullRequest(linkTo(7));
+		await setup.settle();
+		await setup.tickAndSettle();
+
+		expect(setup.statusOf(7)?.status).toBe('waiting_on_author');
+
+		pushCommit(setup, 7, 'head-2');
+		await setup.tickAndSettle();
+		setup.clock.now += QUIET_PERIOD_MS;
+		setup.claude.reviewOutcomes.push(draftedFor('head-2', 'comment'));
+		await setup.tickAndSettle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+		expect(setup.statusOf(7)).toMatchObject({ status: 'waiting_on_author', rounds: 2 });
+	});
+
+	it('a draft PR → started but waits, no review until it is ready', async () => {
+		const setup = await setUpWithViewer({ reviewMode: 'manual' });
+		const entry = addOtherPullRequest(setup, 7, { isDraft: true });
+
+		await setup.bot.addPullRequest(linkTo(7));
+		await setup.tickAndSettle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(0);
+		expect(setup.statusOf(7)).toMatchObject({
+			status: 'needs_review',
+			isStarted: true,
+			isDraft: true,
+		});
+
+		entry.live.isDraft = false;
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.tickAndSettle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.statusOf(7)).toMatchObject({ status: 'draft_ready', isDraft: false });
+	});
+
+	it('a PR already being reviewed → existing, nothing restarts', async () => {
+		const setup = await setUpWithViewer({ reviewMode: 'manual' });
+		const gate = createGate();
+
+		addOtherPullRequest(setup, 7);
+		setup.claude.reviewGate = gate.promise;
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.bot.addPullRequest(linkTo(7));
+
+		const again = await setup.bot.addPullRequest(linkTo(7));
+
+		gate.open();
+		await setup.settle();
+
+		expect(again).toMatchObject({ kind: 'added', isExisting: true });
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+	});
+
+	it('a requested PR you have not started → queued like clicking Review', async () => {
+		const setup = await setUpWithViewer({ reviewMode: 'manual' });
+
+		setup.github.addPullRequest(7);
+		await setup.tickAndSettle();
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+
+		const result = await setup.bot.addPullRequest(linkTo(7));
+
+		await setup.settle();
+
+		expect(result).toMatchObject({ kind: 'added', isExisting: false });
+		expect(setup.statusOf(7)).toMatchObject({ status: 'draft_ready', source: 'requested' });
+	});
+
+	it('a PR you took over, with your old review → restarts cleanly, no instant take-over', async () => {
+		const setup = await setUpWithViewer({ reviewMode: 'auto' });
+		const entry = setup.github.addPullRequest(7);
+
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.tickAndSettle();
+		entry.reviews.push({
+			id: 99,
+			state: 'CHANGES_REQUESTED',
+			body: 'Please split this',
+			submittedAt: new Date(setup.clock.now + 1000).toISOString(),
+			commitId: 'head-1',
+			authorLogin: VIEWER_LOGIN,
+			authorType: 'User',
+		});
+		pushCommit(setup, 7, 'head-2');
+		setup.clock.now += QUIET_PERIOD_MS * 2;
+		await setup.tickAndSettle();
+
+		expect(setup.statusOf(7)?.status).toBe('needs_you');
+
+		setup.clock.now += 60_000;
+		setup.claude.reviewOutcomes.push(draftedFor('head-2', 'comment'));
+		await setup.bot.addPullRequest(linkTo(7));
+		await setup.settle();
+		await setup.tickAndSettle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+		expect(setup.statusOf(7)).toMatchObject({ status: 'waiting_on_author', source: 'link' });
+	});
+
+	it('the same PR pasted twice at once → one row, both succeed', async () => {
+		const setup = await setUpWithViewer({ reviewMode: 'manual' });
+
+		addOtherPullRequest(setup, 7);
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+
+		const results = await Promise.all([
+			setup.bot.addPullRequest(linkTo(7)),
+			setup.bot.addPullRequest(linkTo(7)),
+		]);
+
+		await setup.settle();
+
+		expect(results.map((result) => result.kind)).toEqual(['added', 'added']);
+		expect(setup.bot.getState().pullRequests).toHaveLength(1);
+	});
+
+	it('a link in different case, or to a renamed repo → the same row as the canonical PR', async () => {
+		const setup = await setUpWithViewer({ reviewMode: 'manual' });
+
+		setup.github.addPullRequest(7, { owner: 'Acme', repo: 'API' });
+		await setup.tickAndSettle();
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.bot.addPullRequest('https://github.com/acme/api/pull/7');
+		await setup.bot.addPullRequest('https://github.com/old-name/old-api/pull/7');
+		await setup.settle();
+
+		expect(setup.bot.getState().pullRequests).toHaveLength(1);
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+	});
+
+	it.each([
+		['not a link', { kind: 'invalid_link' }],
+		['https://gitlab.com/acme/api/pull/7', { kind: 'unsupported_host' }],
+		['https://github.com/acme/api/pull/404', { kind: 'pr_not_found' }],
+	] as const)('%s → %o', async (url, expected) => {
+		const setup = await setUpWithViewer();
+
+		expect(await setup.bot.addPullRequest(url)).toEqual(expected);
+		expect(setup.bot.getState().pullRequests).toHaveLength(0);
+	});
+
+	it.each([
+		[403, { kind: 'no_access' }],
+		[429, { kind: 'no_access' }],
+		[500, { kind: 'github_unavailable' }],
+	] as const)('GitHub answers %i → %o', async (status, expected) => {
+		const setup = await setUpWithViewer();
+
+		addOtherPullRequest(setup, 7);
+		setup.github.failPullRequestFetchesWith.push(status);
+
+		expect(await setup.bot.addPullRequest(linkTo(7))).toEqual(expected);
+		expect(setup.bot.getState().pullRequests).toHaveLength(0);
+	});
+
+	it.each([
+		['stopped', { status: 'stopped', rounds: 1 }],
+		['done after the round limit', { status: 'done', rounds: 5 }],
+		['blocked', { status: 'blocked', rounds: 2, lastError: 'PR kept changing' }],
+	] as const)('re-adding a %s PR → a fresh cycle that starts at once', async (_label, previous) => {
+		const setup = await setUpWithViewer({ reviewMode: 'manual' });
+		const outcomes: unknown[] = [];
+		const logInfo = setup.dependencies.logger.info;
+
+		addOtherPullRequest(setup, 7);
+		await setup.bot.addPullRequest(linkTo(7));
+		await setup.settle();
+		setup.dependencies.store.updatePullRequest(setup.statusOf(7)?.id ?? 0, {
+			...previous,
+			pendingApproval: null,
+		});
+
+		setup.dependencies.logger.info = (event, fields) => {
+			if (event === 'pull_request_added_by_link') {
+				outcomes.push(fields?.outcome);
+			}
+
+			logInfo(event, fields);
+		};
+
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+
+		const callsBefore = setup.claude.reviewCalls.length;
+		const result = await setup.bot.addPullRequest(linkTo(7));
+
+		expect(result).toMatchObject({ kind: 'added', isExisting: false });
+		expect(setup.statusOf(7)).toMatchObject({ rounds: 0, source: 'link', reason: null });
+		expect(
+			setup.statusOf(7)?.status === 'queued' || setup.statusOf(7)?.status === 'reviewing',
+		).toBe(true);
+		expect(outcomes).toEqual(['requeued']);
+
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(callsBefore + 1);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+	});
+
+	it('the skip list does not stop a PR you added by link', async () => {
+		const setup = await setUpWithViewer({ reviewMode: 'manual', skip: ['acme'] });
+
+		addOtherPullRequest(setup, 7);
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.bot.addPullRequest(linkTo(7));
+		await setup.settle();
+		await setup.tickAndSettle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+	});
+
+	it.each([
+		[true, 'merged'],
+		[false, 'closed'],
+	] as const)('closed PR (merged %s) → pr_closed %s', async (isMerged, reason) => {
+		const setup = await setUpWithViewer();
+
+		addOtherPullRequest(setup, 7, { state: 'closed', isMerged });
+
+		expect(await setup.bot.addPullRequest(linkTo(7))).toEqual({ kind: 'pr_closed', reason });
+	});
+});
+
+describe('your own PR', () => {
+	const addOwnPullRequest = async (settings = {}) => {
+		const setup = setUp(settings);
+
+		await setup.tickAndSettle();
+
+		const entry = setup.github.addPullRequest(7, { author: 'Luka' });
+
+		entry.isRequested = false;
+
+		return { setup, entry };
+	};
+
+	it('auto mode with auto-approve on → the approve filing posts as a COMMENT', async () => {
+		const { setup } = await addOwnPullRequest({ reviewMode: 'auto', autoApprove: 'on' });
+
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'approve'));
+		await setup.bot.addPullRequest('https://github.com/acme/api/pull/7');
+		await setup.settle();
+
+		expect(setup.github.submissions.map((submission) => submission.event)).toEqual(['COMMENT']);
+		expect(setup.statusOf(7)).toMatchObject({ status: 'waiting_on_author', isOwn: true });
+	});
+
+	it('manual mode → the held draft is a comment, Approve is refused, the draft says it is yours', async () => {
+		const { setup } = await addOwnPullRequest({ reviewMode: 'manual' });
+
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'approve'));
+		await setup.bot.addPullRequest('https://github.com/acme/api/pull/7');
+		await setup.settle();
+
+		const id = setup.statusOf(7)?.id ?? 0;
+
+		expect(setup.statusOf(7)?.draft?.filing).toBe('comment');
+		expect(setup.bot.getDraft(id)).toMatchObject({ filing: 'comment', isOwn: true });
+		expect(await setup.bot.approve(id)).toBe('own_pr');
+		expect(
+			await setup.bot.postDraft(id, {
+				headSha: 'head-1',
+				event: 'REQUEST_CHANGES',
+				mainReview: 'Fix it',
+				comments: [],
+				fileComments: [],
+			}),
+		).toEqual({ result: 'invalid_draft', reason: 'you can only comment on your own PR' });
+		expect(setup.github.submissions).toEqual([]);
+	});
+
+	it('your own comment review on your PR → the bot keeps going, no take-over', async () => {
+		const { setup, entry } = await addOwnPullRequest({ reviewMode: 'auto' });
+
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.bot.addPullRequest('https://github.com/acme/api/pull/7');
+		await setup.settle();
+		entry.reviews.push({
+			id: 99,
+			state: 'COMMENTED',
+			body: 'Answering the reviewers',
+			submittedAt: new Date(setup.clock.now + 1000).toISOString(),
+			commitId: 'head-1',
+			authorLogin: VIEWER_LOGIN,
+			authorType: 'User',
+		});
+		pushCommit(setup, 7, 'head-2');
+		await setup.tickAndSettle();
+		setup.clock.now += QUIET_PERIOD_MS;
+		setup.claude.reviewOutcomes.push(draftedFor('head-2', 'comment'));
+		await setup.tickAndSettle();
+
+		expect(setup.statusOf(7)?.status).toBe('waiting_on_author');
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+	});
+});

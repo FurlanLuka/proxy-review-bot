@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { ANCHOR_TIME, makeDraft, makeLive, makeTracked } from '../test-support/factories.js';
 import {
 	isDecisionDeferred,
+	isOwnPullRequest,
 	isViewerRequested,
 	decideApprovalAction,
 	decidePostingAction,
@@ -240,6 +241,7 @@ const decidePosting = (overrides: Partial<Parameters<typeof decidePostingAction>
 		live: { headSha: 'head-1', baseRefName: 'main', state: 'open' },
 		settings: { autoApprove: 'off', smallPullRequestLineLimit: 100, reviewMode: 'auto' },
 		changedLines: 50,
+		isOwn: false,
 		...overrides,
 	});
 };
@@ -279,6 +281,49 @@ describe('isDecisionDeferred', () => {
 		expect(
 			isDecisionDeferred({ tracked: makeTracked({ status: 'done' }), live, isPaused: true }),
 		).toBe(false);
+	});
+});
+
+describe('isOwnPullRequest', () => {
+	it.each([
+		['luka', 'luka', true],
+		['Luka', 'luka', true],
+		['luka', 'LUKA', true],
+		['ana', 'luka', false],
+		['luka', null, false],
+	])('author %s, viewer %s → %s', (author, viewerLogin, expected) => {
+		expect(isOwnPullRequest({ author, viewerLogin })).toBe(expected);
+	});
+});
+
+describe('decidePostingAction on your own PR', () => {
+	const approveDraft = makeDraft({ filing: 'approve' });
+
+	it('auto mode with auto-approve on and an approve filing → posts COMMENT', () => {
+		expect(
+			decidePosting({
+				result: approveDraft,
+				isOwn: true,
+				settings: { autoApprove: 'on', smallPullRequestLineLimit: 100, reviewMode: 'auto' },
+			}),
+		).toMatchObject({ kind: 'post', event: 'COMMENT', draft: { filing: 'comment' } });
+	});
+
+	it('auto mode with auto-approve off and an approve filing → posts COMMENT, never waits to approve', () => {
+		expect(decidePosting({ result: approveDraft, isOwn: true })).toMatchObject({
+			kind: 'post',
+			event: 'COMMENT',
+		});
+	});
+
+	it('manual mode and an approve filing → the held draft is a comment', () => {
+		expect(
+			decidePosting({
+				result: approveDraft,
+				isOwn: true,
+				settings: { autoApprove: 'off', smallPullRequestLineLimit: 100, reviewMode: 'manual' },
+			}),
+		).toMatchObject({ kind: 'hold_draft', draft: { filing: 'comment' } });
 	});
 });
 

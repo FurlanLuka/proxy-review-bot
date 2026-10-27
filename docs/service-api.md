@@ -62,6 +62,9 @@ Every request carries `Authorization: Bearer <PRB_TOKEN>`. A request without it 
 			"reason": null,
 			"retryAt": null,
 			"isStarted": true,
+			"isOwn": false,
+			"isDraft": false,
+			"source": "requested",
 			"reviewStartedAt": null,
 			"updatedAt": 1793015179000,
 			"progress": null
@@ -108,6 +111,10 @@ Every request carries `Authorization: Bearer <PRB_TOKEN>`. A request without it 
   - A subagent's `status` is `running`, `completed` or `failed`.
 - Rows are ordered by `updatedAt` descending. `done` rows are only included for 24 hours.
 
+- `isOwn`: true when you wrote the PR (author matches your `gh` login, ignoring case). GitHub only accepts comment reviews from a PR's author, so on your own PR every draft is a comment (an approve-level result is filed as a comment), approving answers 409 `own_pr`, posting with `APPROVE` or `REQUEST_CHANGES` answers 400 `invalid_draft` with the reason "you can only comment on your own PR", and your own comment reviews there don't count as you taking over.
+- `isDraft`: the PR is a GitHub draft. A started draft PR waits in `needs_review` and is reviewed once it's marked ready.
+- `source`: `requested` when the bot found the PR because you were asked to review, `link` when you added it with POST /prs.
+
 ## GET /history
 
 Finished PRs from the last 30 days, newest first, at most 200.
@@ -153,8 +160,34 @@ Every action is a POST, returns `{ "ok": true }` with status 200, and returns `{
 | `/prs/:id/post` | post the draft, edited or not; body below | 404, 400 `invalid_draft` with a `reason`, 409 `no_draft`, `head_moved` (the PR is re-reviewed), `busy` |
 | `/prs/:id/discard` | throw the draft away; the PR waits for new commits | 404, 409 `no_draft` |
 | `/prs/:id/retry` | reset rounds and attempts, then queue a review | 404, 409 `busy` |
+| `/prs/:id/approve` on your own PR | refused | 409 `own_pr` |
 | `/pause`, `/resume` | pause or resume the whole bot | |
 | `/readiness/check` | re-run the setup checks | |
+
+## POST /prs
+
+Adds a PR by its link and starts reviewing it, even if nobody requested your review. Body: `{ "url": "https://github.com/<owner>/<repo>/pull/<number>" }`. Trailing paths (`/files`, `/commits/<sha>`), a query, a fragment and a missing `https://` are fine. Only github.com is supported.
+
+Returns `{ "id": 12, "isExisting": false }`. `isExisting` is true when the PR was already in review and nothing changed.
+
+- A new PR is tracked with `source: "link"` and queued at once. A GitHub draft is started but waits in `needs_review` until it's ready.
+- A PR the bot found but you hadn't started is queued, like clicking Review.
+- A finished, stopped, given-up or blocked PR starts a fresh cycle (pasting the link is an explicit retry).
+- Anything else already in review is left alone and answers `isExisting: true`.
+- The log line `pull_request_added_by_link` and the `added_by_link` activity record an `outcome`: `inserted` (new), `started` (it was waiting for you to start it), `requeued` (a fresh cycle) or `existing` (left alone).
+- Owner and repo come from GitHub's answer, so a link in different case or to a renamed repo finds the same PR.
+- The watch and skip lists don't apply: adding a link is explicit.
+
+| Status | Error | When |
+|---|---|---|
+| 400 | `invalid_link` | not a GitHub PR link |
+| 400 | `unsupported_host` | a link to another host |
+| 404 | `pr_not_found` | the PR doesn't exist, or your `gh` login can't see it |
+| 403 | `no_access` | GitHub refused (SSO, or a 403/429 rate limit) |
+| 409 | `pr_closed` | the PR is closed; `reason` is `merged` or `closed` |
+| 502 | `github_unavailable` | GitHub couldn't be reached |
+
+A PR added while a sync is running can, rarely, be set back to `needs_review` by that sync, the same as Retry.
 
 ## GET /prs/:id/draft
 
@@ -168,7 +201,8 @@ Returns the draft held for a `draft_ready` or `awaiting_approval` PR. It respond
 	"mainReview": "The retry loop needs a backoff…",
 	"comments": [{ "path": "src/retry.ts", "line": 12, "side": "RIGHT", "body": "No delay between attempts." }],
 	"fileComments": [{ "path": "src/old.ts", "body": "This file can go." }],
-	"coverage": "Checked retry paths; couldn't run the tests."
+	"coverage": "Checked retry paths; couldn't run the tests.",
+	"isOwn": false
 }
 ```
 

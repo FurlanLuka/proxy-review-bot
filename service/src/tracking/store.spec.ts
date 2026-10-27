@@ -23,7 +23,35 @@ describe('store', () => {
 			version: number;
 		};
 
-		expect(version.version).toBe(11);
+		expect(version.version).toBe(13);
+	});
+
+	it('upgrading an existing database → every PR is a requested, non-draft PR', () => {
+		const database = new Database(':memory:');
+
+		migrate(database);
+		database.run('DELETE FROM schema_migrations WHERE version > 11');
+		database.run('ALTER TABLE tracked_pull_requests DROP COLUMN source');
+		database.run('ALTER TABLE tracked_pull_requests DROP COLUMN is_draft');
+		database.run(
+			`INSERT INTO tracked_pull_requests (owner, repo, number, url, title, author, status, tracked_since, updated_at)
+			VALUES ('acme', 'api', 1, 'u', 't', 'a', 'waiting_on_author', 100, 100)`,
+		);
+
+		const [tracked] = createStore(database).listPullRequests();
+
+		expect(tracked).toMatchObject({ source: 'requested', isDraft: false });
+	});
+
+	it('finding a PR ignores owner and repo case', () => {
+		const store = createStore(new Database(':memory:'));
+		const inserted = store.insertDiscovered({
+			discovered: { ...DISCOVERED, owner: 'Acme', repo: 'API' },
+			status: 'needs_review',
+			now: 1,
+		});
+
+		expect(store.findPullRequest('acme', 'api', 7)?.id).toBe(inserted.id);
 	});
 
 	it('upgrading an existing database marks reviewed PRs as started and leaves new ones alone', () => {
@@ -35,6 +63,8 @@ describe('store', () => {
 		database.run('ALTER TABLE tracked_pull_requests DROP COLUMN repair_session_id');
 		database.run('ALTER TABLE tracked_pull_requests DROP COLUMN repair_head_sha');
 		database.run('ALTER TABLE tracked_pull_requests DROP COLUMN repair_saved_at');
+		database.run('ALTER TABLE tracked_pull_requests DROP COLUMN source');
+		database.run('ALTER TABLE tracked_pull_requests DROP COLUMN is_draft');
 
 		const insert = (number: number, status: string, rounds: number) => {
 			database.run(

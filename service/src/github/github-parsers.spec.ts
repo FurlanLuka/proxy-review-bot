@@ -41,6 +41,19 @@ describe('recorded gh fixtures', () => {
 		expect(live.requestedReviewerLogins).toEqual([]);
 	});
 
+	it('owner and repo come from the response, not the link that was asked for', () => {
+		const live = parsePullRequest({
+			json: {
+				...pullRequestFixture,
+				base: { ...pullRequestFixture.base, repo: { full_name: 'Acme/API' } },
+			},
+			owner: 'old-name',
+			repo: 'old-api',
+		});
+
+		expect([live.owner, live.repo]).toEqual(['Acme', 'API']);
+	});
+
 	it('pull request with requested reviewers → their logins', () => {
 		const live = parsePullRequest({
 			json: { ...pullRequestFixture, requested_reviewers: [{ login: 'Luka' }, { login: 'ana' }] },

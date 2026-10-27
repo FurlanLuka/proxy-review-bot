@@ -3,6 +3,7 @@ import SwiftUI
 
 struct MenuFooterView: View {
     @ObservedObject var model: BotModel
+    let onAddPullRequest: () -> Void
     @EnvironmentObject private var navigator: AppNavigator
 
     var body: some View {
@@ -15,6 +16,10 @@ struct MenuFooterView: View {
                 ) {
                     model.togglePause()
                 }
+            }
+
+            IconButton(systemName: "plus", label: "Add a PR by link", help: "Add a PR by link") {
+                onAddPullRequest()
             }
 
             IconButton(systemName: "gearshape", label: "Settings", help: "Settings (⌘,)") {

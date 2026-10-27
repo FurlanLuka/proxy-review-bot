@@ -67,6 +67,25 @@ enum SnapshotRenderer {
                 into: directory
             )
             await render(
+                DraftEditorContentView(
+                    pullRequest: sampleOwnDraftPullRequest(),
+                    draft: sampleDraft(),
+                    onPost: { _ in },
+                    onDiscard: {},
+                    onFinish: {}
+                )
+                .frame(width: size.width, height: size.height),
+                name: "draft-own",
+                into: directory
+            )
+            await render(
+                AddPullRequestRow(model: model, onAdded: { _ in }, onClose: {})
+                    .padding(HomeView.padding)
+                    .frame(width: size.width),
+                name: "add-row",
+                into: directory
+            )
+            await render(
                 HistoryContentView(entries: sampleHistory(), now: Date())
                     .frame(width: size.width, height: size.height),
                 name: "history",
@@ -111,6 +130,14 @@ enum SnapshotRenderer {
         """
 
         return try! JSONDecoder().decode(PullRequest.self, from: Data(json.utf8))
+    }
+
+    private static func sampleOwnDraftPullRequest() -> PullRequest {
+        var pullRequest = sampleDraftPullRequest()
+        pullRequest.isOwn = true
+        pullRequest.source = .link
+
+        return pullRequest
     }
 
     private static func sampleDraft() -> ReviewDraft {

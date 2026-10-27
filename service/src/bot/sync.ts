@@ -9,6 +9,7 @@ import { buildActionUpdate, buildLiveUpdate } from '../review/pull-request-updat
 import {
 	decidePullRequestAction,
 	isDecisionDeferred,
+	isOwnPullRequest,
 	isViewerRequested,
 } from '../review/review-decisions.js';
 import { TERMINAL_STATUSES } from '../tracking/tracking-types.js';
@@ -114,12 +115,13 @@ export const syncPullRequests = async ({
 			const currentNow = now();
 			const isRequestedNow = isViewerRequested({ live, viewerLogin });
 			const recentReviews = reviewsSince(reviews, tracked.trackedSince);
+			const isOwn = isOwnPullRequest({ author: live.author, viewerLogin });
 			const action = decidePullRequestAction({
 				tracked,
 				live,
 				isRequestedNow,
 				myReviewState: parseMyReviewState(recentReviews, viewerLogin),
-				hasManualReview: hasManualReview(recentReviews, viewerLogin),
+				hasManualReview: !isOwn && hasManualReview(recentReviews, viewerLogin),
 				settings,
 				isPaused,
 				now: currentNow,

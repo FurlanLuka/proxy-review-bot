@@ -31,7 +31,10 @@ const PULL_REQUEST_SCHEMA = z.object({
 	deletions: z.number(),
 	user: z.object({ login: z.string() }),
 	head: z.object({ sha: z.string() }),
-	base: z.object({ ref: z.string() }),
+	base: z.object({
+		ref: z.string(),
+		repo: z.object({ full_name: z.string() }).optional(),
+	}),
 	requested_reviewers: z.array(z.object({ login: z.string() })).default([]),
 });
 
@@ -110,10 +113,11 @@ export const parsePullRequest = ({
 	repo,
 }: ParsePullRequestParams): LivePullRequest => {
 	const pullRequest = PULL_REQUEST_SCHEMA.parse(json);
+	const [canonicalOwner, canonicalRepo] = pullRequest.base.repo?.full_name.split('/') ?? [];
 
 	return {
-		owner,
-		repo,
+		owner: canonicalOwner || owner,
+		repo: canonicalRepo || repo,
 		number: pullRequest.number,
 		title: pullRequest.title,
 		url: pullRequest.html_url,

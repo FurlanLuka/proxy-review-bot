@@ -19,7 +19,7 @@ struct HistoryScreen: View {
                 ProgressView("Loading history…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .loaded(let entries):
-                HistoryContentView(entries: entries, now: Date())
+                HistoryContentView(entries: entries, now: Date(), viewerLogin: model.state?.viewerLogin)
             case .failed(let message):
                 HistoryMessageView(symbol: "clock.badge.exclamationmark", message: message, tint: Palette.peach) {
                     Task { await load() }
@@ -57,6 +57,7 @@ struct HistoryScreen: View {
 struct HistoryContentView: View {
     let entries: [HistoryEntry]
     let now: Date
+    var viewerLogin: String?
 
     var body: some View {
         let days = HistoryGrouping.days(for: entries, now: now)
@@ -70,7 +71,7 @@ struct HistoryContentView: View {
                         MenuSectionHeader(title: day.title, count: day.entries.count)
 
                         ForEach(day.entries) { entry in
-                            HistoryRowView(entry: entry)
+                            HistoryRowView(entry: entry, viewerLogin: viewerLogin)
                         }
                     }
                 }

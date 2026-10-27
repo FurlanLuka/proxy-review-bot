@@ -23,6 +23,8 @@ export const DRAFT_HOLDING_STATUSES: ReadonlySet<PullRequestStatus> = new Set([
 	'draft_ready',
 ]);
 
+export type PullRequestSource = 'requested' | 'link';
+
 export interface PendingApproval {
 	headSha: string;
 	draft: DraftedReviewResult;
@@ -43,6 +45,8 @@ export interface TrackedPullRequest {
 	additions: number;
 	deletions: number;
 	isRequested: boolean;
+	isDraft: boolean;
+	source: PullRequestSource;
 	lastReviewedHead: string | null;
 	lastAttemptedHead: string | null;
 	attemptsForHead: number;

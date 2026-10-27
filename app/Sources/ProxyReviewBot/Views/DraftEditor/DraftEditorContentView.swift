@@ -23,6 +23,9 @@ struct DraftEditorContentView: View {
         self.onPost = onPost
         self.onDiscard = onDiscard
         self.onFinish = onFinish
+        var draft = draft
+        draft.isOwn = draft.isOwn ?? pullRequest?.isOwn
+
         _editableDraft = State(initialValue: EditableReviewDraft(draft: draft))
     }
 
@@ -106,13 +109,13 @@ struct DraftEditorContentView: View {
 
                     Spacer()
 
-                    eventPicker
+                    eventChooser
 
                     postButton
                 }
 
                 VStack(alignment: .trailing, spacing: 8) {
-                    eventPicker
+                    eventChooser
 
                     HStack(spacing: 8) {
                         discardButton
@@ -133,6 +136,17 @@ struct DraftEditorContentView: View {
             Label("Discard…", systemImage: "trash")
         }
         .buttonStyle(PillButtonStyle())
+    }
+
+    @ViewBuilder
+    private var eventChooser: some View {
+        if editableDraft.isOwnPullRequest {
+            Text("Your PR · GitHub only allows comments")
+                .font(MenuStyle.metaFont)
+                .foregroundStyle(.secondary)
+        } else {
+            eventPicker
+        }
     }
 
     private var eventPicker: some View {
@@ -176,7 +190,7 @@ struct DraftEditorContentView: View {
         case .approve:
             return "Approve & Post"
         case .comment:
-            return "Post Review"
+            return editableDraft.isOwnPullRequest ? "Post Comment" : "Post Review"
         case .requestChanges:
             return "Request Changes"
         }

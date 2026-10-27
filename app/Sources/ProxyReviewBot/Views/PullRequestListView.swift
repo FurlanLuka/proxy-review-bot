@@ -50,6 +50,7 @@ struct PullRequestListView: View {
             if isExpanded.wrappedValue {
                 ForEach(pullRequests) { pullRequest in
                     PullRequestRowView(model: model, pullRequest: pullRequest)
+                        .id(pullRequest.id)
                 }
             }
         }

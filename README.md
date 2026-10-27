@@ -35,7 +35,9 @@ until you post it.
 ## What it's like to use
 
 PRs that request your review show up under **Ready to review**. Click **Review** and the bot starts.
-Up to three reviews run at once, and you can watch each one's advisors work through it.
+Up to three reviews run at once, and you can watch each one's advisors work through it. To review
+a PR nobody asked you to, your own included, click **+** at the bottom of the window and paste its
+link.
 
 From then on the PR stays under **In review** until it's done, and its card always says which step
 it's at and which round it's on:
@@ -99,7 +101,8 @@ things to move; the [release notes](https://github.com/FurlanLuka/proxy-review-b
 what changed. Every change goes through about 480 service tests, 90 app tests, and a check of the
 built app that the guards still block writes, before it's released.
 
-It reviews PRs that request you. Pasting any PR link (your own included) is next.
+It reviews PRs that request you, and any PR you add by its link, your own included. On your own
+PR it can only comment, because GitHub doesn't let authors approve or request changes.
 
 ## What you need, and where your data goes
 

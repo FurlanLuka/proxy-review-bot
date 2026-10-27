@@ -19,12 +19,20 @@ public struct EditableReviewDraft: Equatable, Sendable {
         fileComments = draft.fileComments.enumerated().map { IncludableItem(id: $0.offset, item: $0.element) }
     }
 
+    public var isOwnPullRequest: Bool {
+        draft.isOwn == true
+    }
+
     public var canApprove: Bool {
-        draft.filing == .approve
+        draft.filing == .approve && !isOwnPullRequest
     }
 
     public var availableEvents: [ReviewEvent] {
-        canApprove ? [.approve, .comment, .requestChanges] : [.comment, .requestChanges]
+        if isOwnPullRequest {
+            return [.comment]
+        }
+
+        return canApprove ? [.approve, .comment, .requestChanges] : [.comment, .requestChanges]
     }
 
     public var unpostableReason: String? {

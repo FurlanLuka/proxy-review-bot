@@ -22,9 +22,28 @@ public struct PullRequest: Codable, Equatable, Identifiable, Sendable {
     public var progress: ReviewProgress?
     public var draft: PullRequestDraftSummary?
     public var isStarted: Bool?
+    public var isOwn: Bool?
+    public var source: PullRequestSource?
+    public var isDraft: Bool?
 
     public var shortName: String {
         "\(repo) #\(number)"
+    }
+
+    public var isOwnPullRequest: Bool {
+        isOwn == true
+    }
+
+    public var isAddedByLink: Bool {
+        source == .link
+    }
+
+    public var authorText: String? {
+        isOwnPullRequest ? "you" : author.map { "@\($0)" }
+    }
+
+    public var isWaitingForDraftToBeReady: Bool {
+        status == .needsReview && isReviewStarted && isDraft == true
     }
 
     public var hasFailedReview: Bool {

@@ -101,9 +101,9 @@ struct PullRequestRowView: View {
                 HStack(spacing: 4) {
                     Text(pullRequest.shortName)
 
-                    if let author = pullRequest.author {
+                    if let authorText = pullRequest.authorText {
                         Text("·")
-                        Text("@\(author)")
+                        Text(authorText)
                     }
                 }
                 .font(MenuStyle.metaFont)
@@ -147,7 +147,7 @@ struct PullRequestRowView: View {
     }
 
     private var stopWording: StopWording {
-        StopWording(isReviewStarted: pullRequest.isReviewStarted)
+        StopWording(isReviewStarted: pullRequest.isReviewStarted, isAddedByLink: pullRequest.isAddedByLink)
     }
 
     private var diffStat: some View {

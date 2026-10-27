@@ -22,4 +22,5 @@ public struct ReviewDraft: Codable, Equatable, Sendable {
     public var comments: [ReviewDraftComment]
     public var fileComments: [ReviewDraftFileComment]
     public var coverage: String?
+    public var isOwn: Bool?
 }

@@ -52,6 +52,15 @@ export const isReviewStarted = (tracked: TrackedPullRequest): boolean => {
 	return tracked.firstQueuedAt !== null;
 };
 
+interface IsOwnPullRequestParams {
+	author: string;
+	viewerLogin: string | null;
+}
+
+export const isOwnPullRequest = ({ author, viewerLogin }: IsOwnPullRequestParams): boolean => {
+	return viewerLogin !== null && author.toLowerCase() === viewerLogin.toLowerCase();
+};
+
 interface IsViewerRequestedParams {
 	live: Pick<LivePullRequest, 'requestedReviewerLogins'>;
 	viewerLogin: string;
@@ -185,6 +194,7 @@ interface DecidePostingActionParams {
 	live: Pick<LivePullRequest, 'headSha' | 'baseRefName' | 'state'>;
 	settings: Pick<Settings, 'autoApprove' | 'smallPullRequestLineLimit' | 'reviewMode'>;
 	changedLines: number;
+	isOwn: boolean;
 }
 
 const isAutoApproveAllowed = (
@@ -204,6 +214,7 @@ export const decidePostingAction = ({
 	live,
 	settings,
 	changedLines,
+	isOwn,
 }: DecidePostingActionParams): PostingAction => {
 	if (result.outcome === 'failed') {
 		return { kind: 'fail', summary: result.summary };
@@ -228,17 +239,20 @@ export const decidePostingAction = ({
 		return { kind: 'record_nothing_new', summary: result.summary };
 	}
 
+	// GitHub only accepts comment reviews from a PR's own author.
+	const draft = isOwn ? { ...result, filing: 'comment' as const } : result;
+
 	if (settings.reviewMode === 'manual') {
-		return { kind: 'hold_draft', draft: result };
+		return { kind: 'hold_draft', draft };
 	}
 
-	if (result.filing === 'comment') {
-		return { kind: 'post', event: 'COMMENT', draft: result };
+	if (draft.filing === 'comment') {
+		return { kind: 'post', event: 'COMMENT', draft };
 	}
 
 	return isAutoApproveAllowed(settings, changedLines)
-		? { kind: 'post', event: 'APPROVE', draft: result }
-		: { kind: 'await_approval', draft: result };
+		? { kind: 'post', event: 'APPROVE', draft }
+		: { kind: 'await_approval', draft };
 };
 
 export type ApprovalAction =

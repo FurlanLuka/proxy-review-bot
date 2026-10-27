@@ -1,3 +1,4 @@
+import type { AddPullRequestResult } from '../bot/add-pull-request.js';
 import type { Bot } from '../bot/bot.js';
 import type { Logger } from '../logging/logger.js';
 import type { SettingsStore } from '../settings/settings.js';
@@ -14,6 +15,31 @@ const DRAFT_PATTERN = /^\/prs\/(\d+)\/draft$/;
 
 const json = (body: unknown, status = 200): Response => {
 	return Response.json(body, { status });
+};
+
+const ADD_ERROR_STATUS: Record<Exclude<AddPullRequestResult['kind'], 'added'>, number> = {
+	invalid_link: 400,
+	unsupported_host: 400,
+	pr_not_found: 404,
+	no_access: 403,
+	pr_closed: 409,
+	github_unavailable: 502,
+};
+
+const addResponse = (result: AddPullRequestResult): Response => {
+	if (result.kind === 'added') {
+		return json({ id: result.id, isExisting: result.isExisting });
+	}
+
+	return result.kind === 'pr_closed'
+		? json({ error: result.kind, reason: result.reason }, ADD_ERROR_STATUS[result.kind])
+		: json({ error: result.kind }, ADD_ERROR_STATUS[result.kind]);
+};
+
+const readUrl = (body: unknown): string => {
+	return typeof body === 'object' && body !== null && 'url' in body && typeof body.url === 'string'
+		? body.url
+		: '';
 };
 
 const actionResponse = (outcome: string | { result: string; reason?: string }): Response => {
@@ -75,6 +101,10 @@ export const createApiHandler = ({ bot, settingsStore, token, logger }: CreateAp
 			bot.setPaused(path === '/pause');
 
 			return json({ ok: true });
+		}
+
+		if (path === '/prs') {
+			return addResponse(await bot.addPullRequest(readUrl(await request.json().catch(() => null))));
 		}
 
 		if (path === '/readiness/check') {

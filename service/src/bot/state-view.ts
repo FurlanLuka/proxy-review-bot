@@ -1,9 +1,9 @@
 import type { Readiness } from '../readiness/readiness.js';
 import type { ReviewProgress } from '../review/review-progress.js';
 import type { Settings } from '../settings/settings.js';
-import { isReviewStarted } from '../review/review-decisions.js';
+import { isOwnPullRequest, isReviewStarted } from '../review/review-decisions.js';
 import { DRAFT_HOLDING_STATUSES } from '../tracking/tracking-types.js';
-import type { TrackedPullRequest } from '../tracking/tracking-types.js';
+import type { PullRequestSource, TrackedPullRequest } from '../tracking/tracking-types.js';
 
 const DONE_VISIBILITY_MS = 24 * 60 * 60_000;
 
@@ -25,6 +25,9 @@ export interface PullRequestView {
 	reason: string | null;
 	retryAt: number | null;
 	isStarted: boolean;
+	isOwn: boolean;
+	isDraft: boolean;
+	source: PullRequestSource;
 	reviewStartedAt: number | null;
 	updatedAt: number;
 	progress: ReviewProgress | null;
@@ -46,11 +49,14 @@ export interface BotState {
 	pullRequests: PullRequestView[];
 }
 
-const toView = (
-	tracked: TrackedPullRequest,
-	settings: Settings,
-	progress: ReviewProgress | null,
-): PullRequestView => ({
+interface ToViewParams {
+	tracked: TrackedPullRequest;
+	settings: Settings;
+	progress: ReviewProgress | null;
+	viewerLogin: string | null;
+}
+
+const toView = ({ tracked, settings, progress, viewerLogin }: ToViewParams): PullRequestView => ({
 	id: tracked.id,
 	owner: tracked.owner,
 	repo: tracked.repo,
@@ -73,6 +79,9 @@ const toView = (
 			? tracked.nextEligibleAt
 			: null,
 	isStarted: isReviewStarted(tracked),
+	isOwn: isOwnPullRequest({ author: tracked.author, viewerLogin }),
+	isDraft: tracked.isDraft,
+	source: tracked.source,
 	reviewStartedAt: tracked.reviewStartedAt,
 	updatedAt: tracked.updatedAt,
 	progress,
@@ -113,6 +122,13 @@ export const buildBotState = ({
 		settings,
 		pullRequests: trackedPullRequests
 			.filter((tracked) => tracked.status !== 'done' || tracked.updatedAt >= visibleSince)
-			.map((tracked) => toView(tracked, settings, progressById.get(tracked.id) ?? null)),
+			.map((tracked) =>
+				toView({
+					tracked,
+					settings,
+					progress: progressById.get(tracked.id) ?? null,
+					viewerLogin: status.viewerLogin,
+				}),
+			),
 	};
 };

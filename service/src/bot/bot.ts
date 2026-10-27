@@ -9,6 +9,8 @@ import type { ReviewProgress } from '../review/review-progress.js';
 import type { PullRequestUpdate, TrackedPullRequest } from '../tracking/tracking-types.js';
 import { approvePullRequest, discardDraft, findHeldDraft, postEditedDraft } from './approval.js';
 import type { ActionResult, DraftPostResult, HeldDraft } from './approval.js';
+import { addPullRequest } from './add-pull-request.js';
+import type { AddPullRequestResult } from './add-pull-request.js';
 import type { BotDependencies, BotRuntime } from './bot-context.js';
 import { runNextReplyJob } from './reply-job.js';
 import { runReviewJob } from './review-job.js';
@@ -32,6 +34,7 @@ export interface Bot {
 	stop(id: number): ActionResult;
 	approve(id: number): Promise<ActionResult>;
 	getDraft(id: number): HeldDraft | 'not_found' | 'no_draft';
+	addPullRequest(url: string): Promise<AddPullRequestResult>;
 	postDraft(id: number, edit: unknown): Promise<DraftPostResult>;
 	discardDraft(id: number): ActionResult;
 	setPaused(isPaused: boolean): void;
@@ -353,7 +356,16 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 				...CLEARED_REPAIR_SESSION,
 			}),
 		approve,
-		getDraft: (id) => findHeldDraft(dependencies, id),
+		addPullRequest: async (url) => {
+			const result = await addPullRequest({ dependencies, url, viewerLogin: runtime.viewerLogin });
+
+			if (result.kind === 'added' && !result.isExisting) {
+				startQueuedReviewsNow();
+			}
+
+			return result;
+		},
+		getDraft: (id) => findHeldDraft({ dependencies, id, viewerLogin: runtime.viewerLogin }),
 		postDraft: (id, edit) =>
 			withPostingGuard<DraftPostResult>(id, { result: 'busy' }, () =>
 				postEditedDraft({ dependencies, id, viewerLogin: runtime.viewerLogin, edit }),

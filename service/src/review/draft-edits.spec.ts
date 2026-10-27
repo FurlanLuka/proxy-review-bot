@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'bun:test';
 import { makeDraft } from '../test-support/factories.js';
 import type { DraftedReviewResult } from './review-result.js';
-import { applyDraftEdits } from './draft-edits.js';
+import { applyDraftEdits, OWN_PULL_REQUEST_REASON } from './draft-edits.js';
 
 const applyDraftEditsTo = (target: DraftedReviewResult, candidate: unknown) => {
-	return applyDraftEdits({ draft: target, draftHeadSha: 'head-1', candidate });
+	return applyDraftEdits({ draft: target, draftHeadSha: 'head-1', candidate, isOwn: false });
 };
 
 const draft = makeDraft({
@@ -139,5 +139,23 @@ describe('applyDraftEdits', () => {
 		expect(
 			requestChanges({ mainReview: '', fileComments: [{ path: 'c.ts', body: 'Fix' }] }).kind,
 		).toBe('valid');
+	});
+
+	it('your own PR → only COMMENT is accepted', () => {
+		const ownEdit = (event: string) => {
+			return applyDraftEdits({
+				draft,
+				draftHeadSha: 'head-1',
+				candidate: edit({ event }),
+				isOwn: true,
+			});
+		};
+
+		expect(ownEdit('APPROVE')).toEqual({ kind: 'invalid', reason: OWN_PULL_REQUEST_REASON });
+		expect(ownEdit('REQUEST_CHANGES')).toEqual({
+			kind: 'invalid',
+			reason: OWN_PULL_REQUEST_REASON,
+		});
+		expect(ownEdit('COMMENT').kind).toBe('valid');
 	});
 });

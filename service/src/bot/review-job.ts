@@ -5,7 +5,7 @@ import {
 	buildPostingUpdate,
 	CLEARED_REPAIR_SESSION,
 } from '../review/pull-request-updates.js';
-import { decidePostingAction } from '../review/review-decisions.js';
+import { decidePostingAction, isOwnPullRequest } from '../review/review-decisions.js';
 import type { ReviewProgress } from '../review/review-progress.js';
 import { findUsableSavedSession } from '../review/review-repair-rules.js';
 import type { ReviewResult } from '../review/review-result.js';
@@ -95,6 +95,7 @@ const applyResult = async ({
 		live,
 		settings,
 		changedLines: live.additions + live.deletions,
+		isOwn: isOwnPullRequest({ author: live.author, viewerLogin: job.viewerLogin }),
 	});
 
 	logger.info('review_result', {

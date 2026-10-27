@@ -1,6 +1,6 @@
 import type { ReviewEvent } from '../github/github-types.js';
 import { applyDraftEdits } from '../review/draft-edits.js';
-import { decideApprovalAction } from '../review/review-decisions.js';
+import { decideApprovalAction, isOwnPullRequest } from '../review/review-decisions.js';
 import type { DraftedReviewResult } from '../review/review-result.js';
 import { DRAFT_HOLDING_STATUSES } from '../tracking/tracking-types.js';
 import type { BotDependencies } from './bot-context.js';
@@ -13,7 +13,8 @@ export type ActionResult =
 	| 'head_moved'
 	| 'not_awaiting_approval'
 	| 'no_draft'
-	| 'invalid_draft';
+	| 'invalid_draft'
+	| 'own_pr';
 
 type DraftChoice =
 	| { kind: 'post'; event: ReviewEvent; draft: DraftedReviewResult }
@@ -29,7 +30,7 @@ interface PostHeldDraftParams {
 	dependencies: BotDependencies;
 	id: number;
 	viewerLogin: string | null;
-	chooseDraft: (heldDraft: DraftedReviewResult, heldHeadSha: string) => DraftChoice;
+	chooseDraft: (heldDraft: DraftedReviewResult, heldHeadSha: string, isOwn: boolean) => DraftChoice;
 	missingDraftResult: ActionResult;
 }
 
@@ -51,7 +52,11 @@ const postHeldDraft = async ({
 		return { result: missingDraftResult };
 	}
 
-	const choice = chooseDraft(tracked.pendingApproval.draft, tracked.pendingApproval.headSha);
+	const choice = chooseDraft(
+		tracked.pendingApproval.draft,
+		tracked.pendingApproval.headSha,
+		isOwnPullRequest({ author: tracked.author, viewerLogin }),
+	);
 
 	if (choice.kind === 'stale') {
 		return { result: 'head_moved' };
@@ -126,6 +131,15 @@ interface DraftActionParams {
 }
 
 export const approvePullRequest = async (params: DraftActionParams): Promise<ActionResult> => {
+	const { dependencies, id, viewerLogin } = params;
+	const tracked = dependencies.store.getPullRequest(id);
+
+	if (tracked !== null && isOwnPullRequest({ author: tracked.author, viewerLogin })) {
+		dependencies.logger.warn('approve_refused_own_pull_request', { id });
+
+		return 'own_pr';
+	}
+
 	const outcome = await postHeldDraft({
 		...params,
 		missingDraftResult: 'not_awaiting_approval',
@@ -149,11 +163,12 @@ export const postEditedDraft = ({
 	return postHeldDraft({
 		...params,
 		missingDraftResult: 'no_draft',
-		chooseDraft: (heldDraft, heldHeadSha) => {
+		chooseDraft: (heldDraft, heldHeadSha, isOwn) => {
 			const result = applyDraftEdits({
 				draft: heldDraft,
 				draftHeadSha: heldHeadSha,
 				candidate: edit,
+				isOwn,
 			});
 
 			return result.kind === 'valid'
@@ -191,12 +206,19 @@ export const discardDraft = ({ dependencies, id }: DiscardDraftParams): ActionRe
 	return 'ok';
 };
 
-export type HeldDraft = DraftedReviewResult & { headSha: string };
+export type HeldDraft = DraftedReviewResult & { headSha: string; isOwn: boolean };
 
-export const findHeldDraft = (
-	dependencies: BotDependencies,
-	id: number,
-): HeldDraft | 'not_found' | 'no_draft' => {
+interface FindHeldDraftParams {
+	dependencies: BotDependencies;
+	id: number;
+	viewerLogin: string | null;
+}
+
+export const findHeldDraft = ({
+	dependencies,
+	id,
+	viewerLogin,
+}: FindHeldDraftParams): HeldDraft | 'not_found' | 'no_draft' => {
 	const tracked = dependencies.store.getPullRequest(id);
 
 	if (tracked === null) {
@@ -207,5 +229,9 @@ export const findHeldDraft = (
 		return 'no_draft';
 	}
 
-	return { ...tracked.pendingApproval.draft, headSha: tracked.pendingApproval.headSha };
+	return {
+		...tracked.pendingApproval.draft,
+		headSha: tracked.pendingApproval.headSha,
+		isOwn: isOwnPullRequest({ author: tracked.author, viewerLogin }),
+	};
 };

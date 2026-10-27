@@ -53,7 +53,7 @@ struct DraftHeaderView: View {
             return "Will \(draft.filing == .approve ? "approve" : "comment")"
         }
 
-        return [pullRequest.shortName, pullRequest.author.map { "@\($0)" }]
+        return [pullRequest.shortName, pullRequest.authorText]
             .compactMap { $0 }
             .joined(separator: " · ")
     }

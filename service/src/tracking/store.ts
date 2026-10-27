@@ -1,7 +1,8 @@
 import type { Database } from 'bun:sqlite';
-import type { DiscoveredPullRequest } from '../github/github-types.js';
+import type { DiscoveredPullRequest, LivePullRequest } from '../github/github-types.js';
 import type {
 	PendingApproval,
+	PullRequestSource,
 	PullRequestStatus,
 	PullRequestUpdate,
 	TrackedPullRequest,
@@ -58,6 +59,8 @@ const MIGRATIONS = [
 	'ALTER TABLE tracked_pull_requests ADD COLUMN repair_session_id TEXT',
 	'ALTER TABLE tracked_pull_requests ADD COLUMN repair_head_sha TEXT',
 	'ALTER TABLE tracked_pull_requests ADD COLUMN repair_saved_at INTEGER',
+	"ALTER TABLE tracked_pull_requests ADD COLUMN source TEXT NOT NULL DEFAULT 'requested'",
+	'ALTER TABLE tracked_pull_requests ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0',
 ];
 
 const COLUMN_NAMES: Record<keyof PullRequestUpdate, string> = {
@@ -71,6 +74,8 @@ const COLUMN_NAMES: Record<keyof PullRequestUpdate, string> = {
 	additions: 'additions',
 	deletions: 'deletions',
 	isRequested: 'is_requested',
+	isDraft: 'is_draft',
+	source: 'source',
 	lastReviewedHead: 'last_reviewed_head',
 	lastAttemptedHead: 'last_attempted_head',
 	attemptsForHead: 'attempts_for_head',
@@ -103,6 +108,8 @@ interface PullRequestRow {
 	additions: number;
 	deletions: number;
 	is_requested: number;
+	is_draft: number;
+	source: string;
 	last_reviewed_head: string | null;
 	last_attempted_head: string | null;
 	attempts_for_head: number;
@@ -135,6 +142,8 @@ const toTrackedPullRequest = (row: PullRequestRow): TrackedPullRequest => ({
 	additions: row.additions,
 	deletions: row.deletions,
 	isRequested: row.is_requested === 1,
+	isDraft: row.is_draft === 1,
+	source: row.source as PullRequestSource,
 	lastReviewedHead: row.last_reviewed_head,
 	lastAttemptedHead: row.last_attempted_head,
 	attemptsForHead: row.attempts_for_head,
@@ -160,7 +169,7 @@ const toColumnValue = (key: keyof PullRequestUpdate, value: unknown): unknown =>
 		return value === null ? null : JSON.stringify(value);
 	}
 
-	if (key === 'isRequested') {
+	if (key === 'isRequested' || key === 'isDraft') {
 		return value ? 1 : 0;
 	}
 
@@ -191,11 +200,19 @@ interface InsertDiscoveredParams {
 	now: number;
 }
 
+interface InsertLinkedParams {
+	live: LivePullRequest;
+	status: PullRequestStatus;
+	isRequested: boolean;
+	now: number;
+}
+
 export interface Store {
 	getPullRequest(id: number): TrackedPullRequest | null;
 	findPullRequest(owner: string, repo: string, number: number): TrackedPullRequest | null;
 	listPullRequests(): TrackedPullRequest[];
 	insertDiscovered(params: InsertDiscoveredParams): TrackedPullRequest;
+	insertLinked(params: InsertLinkedParams): TrackedPullRequest;
 	updatePullRequest(id: number, update: PullRequestUpdate): TrackedPullRequest;
 	resetInterruptedReviews(now: number): number;
 	isCommentHandled(commentId: number): boolean;
@@ -242,7 +259,10 @@ export const createStore = (database: Database): Store => {
 		getPullRequest,
 		findPullRequest: (owner, repo, number) => {
 			const row = database
-				.query('SELECT * FROM tracked_pull_requests WHERE owner = ? AND repo = ? AND number = ?')
+				.query(
+					`SELECT * FROM tracked_pull_requests
+					WHERE owner = ? COLLATE NOCASE AND repo = ? COLLATE NOCASE AND number = ?`,
+				)
 				.get(owner, repo, number) as PullRequestRow | null;
 
 			return row === null ? null : toTrackedPullRequest(row);
@@ -270,6 +290,38 @@ export const createStore = (database: Database): Store => {
 					discovered.title,
 					discovered.author,
 					status,
+					now,
+					now,
+					now,
+				) as PullRequestRow;
+
+			return toTrackedPullRequest(row);
+		},
+		insertLinked: ({ live, status, isRequested, now }) => {
+			const row = database
+				.query(
+					`INSERT INTO tracked_pull_requests
+						(owner, repo, number, url, title, author, status, source, is_requested, is_draft,
+							head_sha, base_ref_name, additions, deletions, first_queued_at, head_changed_at,
+							tracked_since, updated_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, 'link', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					RETURNING *`,
+				)
+				.get(
+					live.owner,
+					live.repo,
+					live.number,
+					live.url,
+					live.title,
+					live.author,
+					status,
+					isRequested ? 1 : 0,
+					live.isDraft ? 1 : 0,
+					live.headSha,
+					live.baseRefName,
+					live.additions,
+					live.deletions,
+					now,
 					now,
 					now,
 					now,

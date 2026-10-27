@@ -12,6 +12,7 @@ public enum ServiceAction: Equatable, Sendable {
     case pause
     case resume
     case checkReadiness
+    case addPullRequest(url: String)
 
     public var method: String {
         switch self {
@@ -46,14 +47,19 @@ public enum ServiceAction: Equatable, Sendable {
             return "/resume"
         case .checkReadiness:
             return "/readiness/check"
+        case .addPullRequest:
+            return "/prs"
         }
     }
 
     public func encodedBody() throws -> Data? {
-        guard case .postDraft(_, let request) = self else {
+        switch self {
+        case .postDraft(_, let request):
+            return try JSONEncoder().encode(request)
+        case .addPullRequest(let url):
+            return try JSONEncoder().encode(["url": url])
+        default:
             return nil
         }
-
-        return try JSONEncoder().encode(request)
     }
 }

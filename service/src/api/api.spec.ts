@@ -4,7 +4,7 @@ import { createSilentLogger } from '../logging/logger.js';
 import type { BotState } from '../bot/state-view.js';
 import { DEFAULT_SETTINGS } from '../settings/settings.js';
 import { makeDraft } from '../test-support/factories.js';
-import { createTestHarness } from '../test-support/fakes.js';
+import { createTestHarness, VIEWER_LOGIN } from '../test-support/fakes.js';
 import { createApiHandler } from './api.js';
 
 const TOKEN = 'test-token';
@@ -29,7 +29,17 @@ const setUp = () => {
 		);
 	};
 
-	return { ...harness, bot, call };
+	const callRaw = (method: string, path: string, body: string) => {
+		return handle(
+			new Request(`http://127.0.0.1${path}`, {
+				method,
+				headers: { authorization: `Bearer ${TOKEN}` },
+				body,
+			}),
+		);
+	};
+
+	return { ...harness, bot, call, callRaw };
 };
 
 describe('api', () => {
@@ -59,6 +69,9 @@ describe('api', () => {
 			number: 7,
 			status: 'needs_review',
 			maxRounds: 5,
+			isOwn: false,
+			isDraft: false,
+			source: 'requested',
 		});
 	});
 
@@ -227,5 +240,97 @@ describe('api request logging', () => {
 		await call('POST', '/pause');
 
 		expect(events).toEqual(['api_request POST /pause']);
+	});
+});
+
+describe('POST /prs', () => {
+	it('a valid link → 200 with the id; again → isExisting', async () => {
+		const { call, github, bot } = setUp();
+
+		await bot.tick();
+		bot.setPaused(true);
+		github.addPullRequest(7).isRequested = false;
+
+		const first = await call('POST', '/prs', { url: 'https://github.com/acme/api/pull/7' });
+		const second = await call('POST', '/prs', { url: 'https://github.com/acme/api/pull/7' });
+
+		expect(first.status).toBe(200);
+		expect(await first.json()).toEqual({ id: expect.any(Number), isExisting: false });
+		expect(await second.json()).toMatchObject({ isExisting: true });
+	});
+
+	it.each([
+		[{ url: 'not a link' }, 400, { error: 'invalid_link' }],
+		[{}, 400, { error: 'invalid_link' }],
+		[{ url: 'https://gitlab.com/acme/api/pull/7' }, 400, { error: 'unsupported_host' }],
+		[{ url: 'https://github.com/acme/api/pull/404' }, 404, { error: 'pr_not_found' }],
+	])('%o → %i', async (body, status, expected) => {
+		const { call } = setUp();
+		const response = await call('POST', '/prs', body);
+
+		expect(response.status).toBe(status);
+		expect(await response.json()).toEqual(expected);
+	});
+
+	it('while paused → queued, and no review runs', async () => {
+		const { call, github, bot, claude } = setUp();
+
+		await bot.tick();
+		bot.setPaused(true);
+		github.addPullRequest(7).isRequested = false;
+
+		const response = await call('POST', '/prs', { url: 'https://github.com/acme/api/pull/7' });
+
+		await bot.waitForIdle();
+
+		expect(response.status).toBe(200);
+		expect(bot.getState().pullRequests[0]?.status).toBe('queued');
+		expect(claude.reviewCalls).toHaveLength(0);
+	});
+
+	it('a body that is not JSON → 400 invalid_link', async () => {
+		const { callRaw } = setUp();
+		const response = await callRaw('POST', '/prs', 'not json at all');
+
+		expect([response.status, await response.json()]).toEqual([400, { error: 'invalid_link' }]);
+	});
+
+	it('approving your own PR → 409 own_pr', async () => {
+		const { call, github, bot } = setUp();
+
+		await bot.tick();
+		bot.setPaused(true);
+		github.addPullRequest(7, { author: VIEWER_LOGIN }).isRequested = false;
+
+		const added = (await (
+			await call('POST', '/prs', { url: 'https://github.com/acme/api/pull/7' })
+		).json()) as { id: number };
+		const response = await call('POST', `/prs/${added.id}/approve`);
+
+		expect([response.status, await response.json()]).toEqual([409, { error: 'own_pr' }]);
+	});
+
+	it('GitHub refuses or is down → 403 no_access / 502 github_unavailable', async () => {
+		const { call, github } = setUp();
+
+		github.addPullRequest(7);
+		github.failPullRequestFetchesWith.push(403, 500);
+
+		const refused = await call('POST', '/prs', { url: 'https://github.com/acme/api/pull/7' });
+		const down = await call('POST', '/prs', { url: 'https://github.com/acme/api/pull/7' });
+
+		expect([refused.status, await refused.json()]).toEqual([403, { error: 'no_access' }]);
+		expect([down.status, await down.json()]).toEqual([502, { error: 'github_unavailable' }]);
+	});
+
+	it('a merged PR → 409 pr_closed with the reason', async () => {
+		const { call, github } = setUp();
+
+		github.addPullRequest(7, { state: 'closed', isMerged: true });
+
+		const response = await call('POST', '/prs', { url: 'https://github.com/acme/api/pull/7' });
+
+		expect(response.status).toBe(409);
+		expect(await response.json()).toEqual({ error: 'pr_closed', reason: 'merged' });
 	});
 });

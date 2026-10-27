@@ -4,6 +4,7 @@ import SwiftUI
 
 struct HistoryRowView: View {
     let entry: HistoryEntry
+    var viewerLogin: String?
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -15,7 +16,7 @@ struct HistoryRowView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
 
-                Text(entry.subtitle)
+                Text(entry.subtitle(viewerLogin: viewerLogin))
                     .font(MenuStyle.metaFont)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

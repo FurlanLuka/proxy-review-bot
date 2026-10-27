@@ -1,5 +1,10 @@
 import type { LivePullRequest } from '../github/github-types.js';
-import type { PullRequestUpdate, TrackedPullRequest } from '../tracking/tracking-types.js';
+import { TERMINAL_STATUSES } from '../tracking/tracking-types.js';
+import type {
+	PullRequestStatus,
+	PullRequestUpdate,
+	TrackedPullRequest,
+} from '../tracking/tracking-types.js';
 import type { PostingAction, PullRequestAction } from './review-decisions.js';
 import { RETRY_BACKOFF_MS } from './review-decisions.js';
 
@@ -103,6 +108,7 @@ export const buildLiveUpdate = ({
 	additions: live.additions,
 	deletions: live.deletions,
 	isRequested: isRequestedNow,
+	isDraft: live.isDraft,
 	headChangedAt: live.headSha === tracked.headSha ? tracked.headChangedAt : now,
 });
 
@@ -167,4 +173,73 @@ export const buildPostingUpdate = ({
 				lastSummary: action.summary,
 			};
 	}
+};
+
+export type LinkedAddOutcome = 'inserted' | 'existing' | 'started' | 'requeued';
+
+export interface LinkedAddPlan {
+	outcome: LinkedAddOutcome;
+	update: PullRequestUpdate | null;
+}
+
+export const statusForLinkedPullRequest = (
+	live: Pick<LivePullRequest, 'isDraft'>,
+): PullRequestStatus => {
+	return live.isDraft ? 'needs_review' : 'queued';
+};
+
+const isRestartedByLink = (tracked: TrackedPullRequest): boolean => {
+	return TERMINAL_STATUSES.has(tracked.status) || tracked.status === 'blocked';
+};
+
+interface PlanLinkedAddParams {
+	existing: TrackedPullRequest | null;
+	live: Pick<LivePullRequest, 'isDraft'>;
+	isRequested: boolean;
+	now: number;
+}
+
+export const planLinkedAdd = ({
+	existing,
+	live,
+	isRequested,
+	now,
+}: PlanLinkedAddParams): LinkedAddPlan => {
+	if (existing === null) {
+		return { outcome: 'inserted', update: null };
+	}
+
+	if (isRestartedByLink(existing)) {
+		return {
+			outcome: 'requeued',
+			update: {
+				...buildReviewCycleReset(now),
+				...CLEARED_REPAIR_SESSION,
+				status: statusForLinkedPullRequest(live),
+				source: 'link',
+				isRequested,
+				isDraft: live.isDraft,
+				firstQueuedAt: now,
+				reviewStartedAt: null,
+				updatedAt: now,
+			},
+		};
+	}
+
+	if (existing.status === 'needs_review') {
+		return {
+			outcome: 'started',
+			update: {
+				status: statusForLinkedPullRequest(live),
+				isDraft: live.isDraft,
+				firstQueuedAt: firstQueuedAtFor(existing, now),
+				lastError: null,
+				nextEligibleAt: null,
+				pendingApproval: null,
+				updatedAt: now,
+			},
+		};
+	}
+
+	return { outcome: 'existing', update: null };
 };

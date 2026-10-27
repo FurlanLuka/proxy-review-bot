@@ -3,6 +3,8 @@ import Foundation
 public enum PullRequestDetail {
     public static func text(for pullRequest: PullRequest, now: Date) -> String {
         switch pullRequest.status {
+        case .needsReview where pullRequest.isWaitingForDraftToBeReady:
+            return "Draft PR · reviews when it's ready for review"
         case .needsReview where pullRequest.isReviewStarted:
             return ReviewStep.upNext.label
         case .needsReview:
