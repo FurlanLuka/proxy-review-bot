@@ -31,10 +31,11 @@ describe('recorded gh fixtures', () => {
 		expect(parseSearchResults(withDraft)).toHaveLength(searchFixture.items.length - 1);
 	});
 
-	it('pull request → head, base and line counts', () => {
+	it('pull request → head, branches and line counts', () => {
 		const live = parsePullRequest({ json: pullRequestFixture, owner: 'cli', repo: 'cli' });
 
 		expect(live.headSha).toBe(pullRequestFixture.head.sha);
+		expect(live.headRefName).toBe('attach-installation-tokens');
 		expect(live.baseRefName).toBe('trunk');
 		expect(live.state).toBe('closed');
 		expect(live.isMerged).toBe(true);

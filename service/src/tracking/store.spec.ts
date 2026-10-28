@@ -3,6 +3,7 @@ import { describe, expect, it } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { makeLive } from '../test-support/factories.js';
 import { createStore, migrate } from './store.js';
 
 const DISCOVERED = { owner: 'acme', repo: 'api', number: 7, title: 't', url: 'u', author: 'a' };
@@ -23,7 +24,7 @@ describe('store', () => {
 			version: number;
 		};
 
-		expect(version.version).toBe(13);
+		expect(version.version).toBe(14);
 	});
 
 	it('upgrading an existing database → every PR is a requested, non-draft PR', () => {
@@ -33,6 +34,7 @@ describe('store', () => {
 		database.run('DELETE FROM schema_migrations WHERE version > 11');
 		database.run('ALTER TABLE tracked_pull_requests DROP COLUMN source');
 		database.run('ALTER TABLE tracked_pull_requests DROP COLUMN is_draft');
+		database.run('ALTER TABLE tracked_pull_requests DROP COLUMN head_ref_name');
 		database.run(
 			`INSERT INTO tracked_pull_requests (owner, repo, number, url, title, author, status, tracked_since, updated_at)
 			VALUES ('acme', 'api', 1, 'u', 't', 'a', 'waiting_on_author', 100, 100)`,
@@ -40,7 +42,7 @@ describe('store', () => {
 
 		const [tracked] = createStore(database).listPullRequests();
 
-		expect(tracked).toMatchObject({ source: 'requested', isDraft: false });
+		expect(tracked).toMatchObject({ source: 'requested', isDraft: false, headRefName: null });
 	});
 
 	it('finding a PR ignores owner and repo case', () => {
@@ -65,6 +67,7 @@ describe('store', () => {
 		database.run('ALTER TABLE tracked_pull_requests DROP COLUMN repair_saved_at');
 		database.run('ALTER TABLE tracked_pull_requests DROP COLUMN source');
 		database.run('ALTER TABLE tracked_pull_requests DROP COLUMN is_draft');
+		database.run('ALTER TABLE tracked_pull_requests DROP COLUMN head_ref_name');
 
 		const insert = (number: number, status: string, rounds: number) => {
 			database.run(
@@ -142,6 +145,28 @@ describe('store', () => {
 		expect(store.getFlag('is_paused')).toBe('true');
 		store.setFlag('is_paused', null);
 		expect(store.getFlag('is_paused')).toBeNull();
+	});
+
+	it('branch names round-trip through a linked insert and an update', () => {
+		const store = createStore(new Database(':memory:'));
+		const linked = store.insertLinked({
+			live: makeLive({ headRefName: 'develop', baseRefName: 'master' }),
+			status: 'queued',
+			isRequested: false,
+			now: 1,
+		});
+
+		expect(linked).toMatchObject({ headRefName: 'develop', baseRefName: 'master' });
+
+		const discovered = store.insertDiscovered({
+			discovered: { ...DISCOVERED, number: 8 },
+			status: 'needs_review',
+			now: 1,
+		});
+
+		expect(discovered.headRefName).toBeNull();
+		store.updatePullRequest(discovered.id, { headRefName: 'feature' });
+		expect(store.findPullRequest('acme', 'api', 8)?.headRefName).toBe('feature');
 	});
 
 	it('handled comments are remembered', () => {

@@ -3462,3 +3462,123 @@ describe('your own PR', () => {
 		expect(setup.claude.reviewCalls).toHaveLength(2);
 	});
 });
+
+describe('Start manually branches', () => {
+	const RELEASE = { headRefName: 'develop', baseRefName: 'master' };
+
+	it('auto mode: a release PR waits for Review, then runs one round and waits again after a push', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+
+		setup.github.addPullRequest(7, RELEASE);
+		await setup.tickAndSettle();
+		await setup.tickAndSettle();
+
+		expect(setup.claude.reviewCalls).toEqual([]);
+		expect(setup.statusOf(7)).toMatchObject({
+			status: 'needs_review',
+			isManualStart: true,
+			headRefName: 'develop',
+			baseRefName: 'master',
+		});
+
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		expect(setup.bot.requestReview(setup.statusOf(7)?.id ?? 0)).toBe('ok');
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.statusOf(7)).toMatchObject({ status: 'waiting_on_author', isManualStart: false });
+
+		pushCommit(setup, 7, 'head-2');
+		await setup.tickAndSettle();
+		setup.clock.now += QUIET_PERIOD_MS;
+		await setup.tickAndSettle();
+		await setup.tickAndSettle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.statusOf(7)).toMatchObject({
+			status: 'needs_review',
+			isStarted: true,
+			isManualStart: true,
+		});
+	});
+
+	it('a failed release review shows no automatic retry time, and Retry runs one round', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+
+		setup.github.addPullRequest(7, RELEASE);
+		await setup.tickAndSettle();
+		setup.claude.reviewOutcomes.push({ kind: 'failed', summary: 'Claude run timed out' });
+		setup.bot.requestReview(setup.statusOf(7)?.id ?? 0);
+		await setup.settle();
+
+		expect(setup.statusOf(7)).toMatchObject({ status: 'waiting_on_author', retryAt: null });
+
+		setup.clock.now += 11 * 60_000;
+		await setup.tickAndSettle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.statusOf(7)?.status).toBe('needs_review');
+
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		expect(setup.bot.retry(setup.statusOf(7)?.id ?? 0)).toBe('ok');
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+		expect(setup.statusOf(7)?.status).toBe('waiting_on_author');
+	});
+
+	it('adding a release PR by link reviews it once, and a push does not start another round', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+
+		await setup.tickAndSettle();
+
+		const entry = setup.github.addPullRequest(7, RELEASE);
+
+		entry.isRequested = false;
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.bot.addPullRequest('https://github.com/acme/api/pull/7');
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+
+		pushCommit(setup, 7, 'head-2');
+		await setup.tickAndSettle();
+		setup.clock.now += QUIET_PERIOD_MS;
+		await setup.tickAndSettle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.statusOf(7)).toMatchObject({ status: 'needs_review', isManualStart: true });
+	});
+
+	it('a re-request on a started release PR → Up next, no new round', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+		const entry = setup.github.addPullRequest(7, RELEASE);
+
+		await setup.tickAndSettle();
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.bot.requestReview(setup.statusOf(7)?.id ?? 0);
+		await setup.settle();
+		entry.isRequested = false;
+		await setup.tickAndSettle();
+
+		expect(setup.statusOf(7)?.status).toBe('waiting_on_author');
+
+		entry.isRequested = true;
+		await setup.tickAndSettle();
+		await setup.tickAndSettle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.statusOf(7)).toMatchObject({ status: 'needs_review', isManualStart: true });
+	});
+
+	it('an empty list turns the rule off', async () => {
+		const setup = setUp({ reviewMode: 'auto', manualStartBranches: [] });
+
+		setup.github.addPullRequest(7, RELEASE);
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.tickAndSettle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.statusOf(7)?.isManualStart).toBe(false);
+	});
+});

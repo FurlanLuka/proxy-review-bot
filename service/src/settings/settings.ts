@@ -4,6 +4,17 @@ import { z } from 'zod';
 
 const TOOL_PATH_SCHEMA = z.string().min(1).nullable().default(null);
 
+const BRANCH_NAME_SCHEMA = z.string().trim().min(1);
+
+const BRANCH_PAIR_SCHEMA = z
+	.object({ head: BRANCH_NAME_SCHEMA, base: BRANCH_NAME_SCHEMA })
+	.strict();
+
+const DEFAULT_MANUAL_START_BRANCHES = [
+	{ head: 'develop', base: 'master' },
+	{ head: 'develop', base: 'main' },
+];
+
 export const SETTINGS_SCHEMA = z
 	.object({
 		reviewMode: z.enum(['manual', 'auto']).default('manual'),
@@ -15,6 +26,7 @@ export const SETTINGS_SCHEMA = z
 		answerQuestions: z.boolean().default(true),
 		watch: z.array(z.string().min(1)).default([]),
 		skip: z.array(z.string().min(1)).default([]),
+		manualStartBranches: z.array(BRANCH_PAIR_SCHEMA).default(DEFAULT_MANUAL_START_BRANCHES),
 		toolPaths: z
 			.object({ claude: TOOL_PATH_SCHEMA, gh: TOOL_PATH_SCHEMA, git: TOOL_PATH_SCHEMA })
 			.default({}),

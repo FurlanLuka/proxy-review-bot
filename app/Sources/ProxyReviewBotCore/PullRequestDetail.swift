@@ -5,6 +5,8 @@ public enum PullRequestDetail {
         switch pullRequest.status {
         case .needsReview where pullRequest.isWaitingForDraftToBeReady:
             return "Draft PR · reviews when it's ready for review"
+        case .needsReview where pullRequest.isWaitingForManualStart:
+            return manualStartText(for: pullRequest)
         case .needsReview where pullRequest.isReviewStarted:
             return ReviewStep.upNext.label
         case .needsReview:
@@ -95,6 +97,16 @@ public enum PullRequestDetail {
         }
 
         return pullRequest.summary.map { "\(label) · \($0)" } ?? label
+    }
+
+    private static func manualStartText(for pullRequest: PullRequest) -> String {
+        [
+            pullRequest.isReviewStarted ? ReviewStep.upNext.label : nil,
+            pullRequest.branchesText,
+            "starts when you click Review",
+        ]
+        .compactMap { $0 }
+        .joined(separator: " · ")
     }
 
     private static func waitingForYou(_ detail: String) -> String {

@@ -40,6 +40,19 @@ enum SnapshotRenderer {
                     into: directory
                 )
             }
+            if let manualStart = model.state?.pullRequests.filter(\.isWaitingForManualStart), !manualStart.isEmpty {
+                await render(
+                    VStack(spacing: 12) {
+                        ForEach(manualStart) { pullRequest in
+                            PullRequestRowView(model: model, pullRequest: pullRequest, isProgressExpanded: false)
+                        }
+                    }
+                    .environmentObject(AppNavigator())
+                    .padding(12).frame(width: size.width - HomeView.padding * 2),
+                    name: "manual-start",
+                    into: directory
+                )
+            }
             await render(
                 PullRequestRowView(model: model, pullRequest: sampleReviewingPullRequest(), isProgressExpanded: true)
                     .environmentObject(AppNavigator())

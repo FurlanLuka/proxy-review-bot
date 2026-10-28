@@ -61,6 +61,7 @@ const MIGRATIONS = [
 	'ALTER TABLE tracked_pull_requests ADD COLUMN repair_saved_at INTEGER',
 	"ALTER TABLE tracked_pull_requests ADD COLUMN source TEXT NOT NULL DEFAULT 'requested'",
 	'ALTER TABLE tracked_pull_requests ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0',
+	'ALTER TABLE tracked_pull_requests ADD COLUMN head_ref_name TEXT',
 ];
 
 const COLUMN_NAMES: Record<keyof PullRequestUpdate, string> = {
@@ -70,6 +71,7 @@ const COLUMN_NAMES: Record<keyof PullRequestUpdate, string> = {
 	status: 'status',
 	rounds: 'rounds',
 	headSha: 'head_sha',
+	headRefName: 'head_ref_name',
 	baseRefName: 'base_ref_name',
 	additions: 'additions',
 	deletions: 'deletions',
@@ -104,6 +106,7 @@ interface PullRequestRow {
 	status: string;
 	rounds: number;
 	head_sha: string | null;
+	head_ref_name: string | null;
 	base_ref_name: string | null;
 	additions: number;
 	deletions: number;
@@ -138,6 +141,7 @@ const toTrackedPullRequest = (row: PullRequestRow): TrackedPullRequest => ({
 	status: row.status as PullRequestStatus,
 	rounds: row.rounds,
 	headSha: row.head_sha,
+	headRefName: row.head_ref_name,
 	baseRefName: row.base_ref_name,
 	additions: row.additions,
 	deletions: row.deletions,
@@ -302,9 +306,9 @@ export const createStore = (database: Database): Store => {
 				.query(
 					`INSERT INTO tracked_pull_requests
 						(owner, repo, number, url, title, author, status, source, is_requested, is_draft,
-							head_sha, base_ref_name, additions, deletions, first_queued_at, head_changed_at,
-							tracked_since, updated_at)
-					VALUES (?, ?, ?, ?, ?, ?, ?, 'link', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+							head_sha, head_ref_name, base_ref_name, additions, deletions, first_queued_at,
+							head_changed_at, tracked_since, updated_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, 'link', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 					RETURNING *`,
 				)
 				.get(
@@ -318,6 +322,7 @@ export const createStore = (database: Database): Store => {
 					isRequested ? 1 : 0,
 					live.isDraft ? 1 : 0,
 					live.headSha,
+					live.headRefName,
 					live.baseRefName,
 					live.additions,
 					live.deletions,

@@ -4,6 +4,7 @@ struct EditableListView: View {
     let title: String
     let placeholder: String
     @Binding var entries: [String]
+    var normalize: (String) -> String? = { $0 }
 
     @State private var newEntry = ""
 
@@ -35,7 +36,7 @@ struct EditableListView: View {
                         Image(systemName: "plus.circle")
                     }
                     .buttonStyle(.borderless)
-                    .disabled(trimmedNewEntry.isEmpty)
+                    .disabled(normalizedNewEntry == nil)
                     .help("Add to \(title) list")
                     .accessibilityLabel("Add to \(title) list")
                 }
@@ -43,16 +44,18 @@ struct EditableListView: View {
         }
     }
 
-    private var trimmedNewEntry: String {
-        newEntry.trimmingCharacters(in: .whitespacesAndNewlines)
+    private var normalizedNewEntry: String? {
+        let trimmed = newEntry.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return trimmed.isEmpty ? nil : normalize(trimmed)
     }
 
     private func addEntry() {
-        guard !trimmedNewEntry.isEmpty, !entries.contains(trimmedNewEntry) else {
+        guard let entry = normalizedNewEntry, !entries.contains(entry) else {
             return
         }
 
-        entries.append(trimmedNewEntry)
+        entries.append(entry)
         newEntry = ""
     }
 }

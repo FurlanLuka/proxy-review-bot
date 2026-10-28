@@ -3,7 +3,10 @@
 	"base": { "ref": "trunk" },
 	"deletions": 13,
 	"draft": false,
-	"head": { "sha": "fa812ef2b1ab1240ca023b7a4b720cbeef7fbdcd" },
+	"head": {
+		"sha": "fa812ef2b1ab1240ca023b7a4b720cbeef7fbdcd",
+		"ref": "attach-installation-tokens"
+	},
 	"html_url": "https://github.com/cli/cli/pull/14804",
 	"merged": true,
 	"number": 14804,

@@ -17,7 +17,7 @@ public struct PullRequestSections: Equatable, Sendable {
     }
 
     public static func attentionCount(of pullRequests: [PullRequest]) -> Int {
-        pullRequests.filter { $0.isWaitingOnYou || $0.isReadyToReview }.count
+        pullRequests.filter { $0.isWaitingOnYou || $0.isReadyToReview || $0.isWaitingForManualStart }.count
     }
 
     private static func rank(of pullRequest: PullRequest, step: ReviewStep) -> Int {

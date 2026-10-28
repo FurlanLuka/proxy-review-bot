@@ -1,7 +1,12 @@
 import type { Readiness } from '../readiness/readiness.js';
 import type { ReviewProgress } from '../review/review-progress.js';
 import type { Settings } from '../settings/settings.js';
-import { isOwnPullRequest, isReviewStarted } from '../review/review-decisions.js';
+import {
+	isAutoStartAllowed,
+	isOwnPullRequest,
+	isReviewStarted,
+	matchesManualStart,
+} from '../review/review-decisions.js';
 import { DRAFT_HOLDING_STATUSES } from '../tracking/tracking-types.js';
 import type { PullRequestSource, TrackedPullRequest } from '../tracking/tracking-types.js';
 
@@ -21,12 +26,15 @@ export interface PullRequestView {
 	additions: number;
 	deletions: number;
 	headSha: string | null;
+	headRefName: string | null;
+	baseRefName: string | null;
 	summary: string | null;
 	reason: string | null;
 	retryAt: number | null;
 	isStarted: boolean;
 	isOwn: boolean;
 	isDraft: boolean;
+	isManualStart: boolean;
 	source: PullRequestSource;
 	reviewStartedAt: number | null;
 	updatedAt: number;
@@ -70,10 +78,17 @@ const toView = ({ tracked, settings, progress, viewerLogin }: ToViewParams): Pul
 	additions: tracked.additions,
 	deletions: tracked.deletions,
 	headSha: tracked.headSha,
+	headRefName: tracked.headRefName,
+	baseRefName: tracked.baseRefName,
 	summary: tracked.lastSummary,
 	reason: tracked.lastError,
 	retryAt:
-		(settings.reviewMode === 'auto' || isReviewStarted(tracked)) &&
+		isAutoStartAllowed({
+			settings,
+			headRefName: tracked.headRefName,
+			baseRefName: tracked.baseRefName,
+			isStarted: isReviewStarted(tracked),
+		}) &&
 		tracked.status === 'waiting_on_author' &&
 		tracked.lastError !== null
 			? tracked.nextEligibleAt
@@ -81,6 +96,13 @@ const toView = ({ tracked, settings, progress, viewerLogin }: ToViewParams): Pul
 	isStarted: isReviewStarted(tracked),
 	isOwn: isOwnPullRequest({ author: tracked.author, viewerLogin }),
 	isDraft: tracked.isDraft,
+	isManualStart:
+		tracked.status === 'needs_review' &&
+		matchesManualStart({
+			headRefName: tracked.headRefName,
+			baseRefName: tracked.baseRefName,
+			rules: settings.manualStartBranches,
+		}),
 	source: tracked.source,
 	reviewStartedAt: tracked.reviewStartedAt,
 	updatedAt: tracked.updatedAt,

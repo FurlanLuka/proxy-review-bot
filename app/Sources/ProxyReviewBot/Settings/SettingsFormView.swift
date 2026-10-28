@@ -39,6 +39,13 @@ struct SettingsFormView: View {
                 }
                 .pickerStyle(.segmented)
 
+                EditableListView(
+                    title: "Start manually",
+                    placeholder: "head → base",
+                    entries: manualStartEntries,
+                    normalize: BranchPair.normalize
+                )
+
                 Picker("Post reviews", selection: $settings.postReviews) {
                     Text("Ask me first").tag(PostReviewsMode.ask)
                     Text("Automatically").tag(PostReviewsMode.auto)
@@ -127,6 +134,14 @@ struct SettingsFormView: View {
             UninstallSection(model: model)
         }
         .formStyle(.grouped)
+    }
+
+    private var manualStartEntries: Binding<[String]> {
+        Binding {
+            (settings.manualStartBranches ?? []).map(\.text)
+        } set: { entries in
+            settings.manualStartBranches = entries.compactMap(BranchPair.init(text:))
+        }
     }
 
     private var pollIntervalChoices: [Int] {

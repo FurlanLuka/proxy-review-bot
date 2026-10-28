@@ -63,6 +63,10 @@ automatically). When reviews post automatically, **Auto-approve** decides whethe
 their own too (never, always, or only for small PRs); otherwise they still wait for your click. You
 can also limit which orgs and repos it watches, and set the round limit and how often it checks.
 
+Release PRs never start on their own. **Start manually** in Settings lists the head → base branches
+the bot leaves for you, `develop → master` and `develop → main` by default. Those PRs wait until you
+click Review, and after each round the next one waits for your click too.
+
 ## What it will and won't do
 
 - **With Post reviews on Ask me first, nothing posts without you.** Every finished review is a draft
@@ -101,7 +105,7 @@ comes back malformed can be asked for again without redoing the work.
 
 I use it every day for the reviews I'm asked for at work. It's young and changes quickly, so expect
 things to move; the [release notes](https://github.com/FurlanLuka/proxy-review-bot/releases) say
-what changed. Every change goes through about 480 service tests, 90 app tests, and a check of the
+what changed. Every change goes through about 600 service tests, 110 app tests, and a check of the
 built app that the guards still block writes, before it's released.
 
 It reviews PRs that request you, and any PR you add by its link, your own included. On your own

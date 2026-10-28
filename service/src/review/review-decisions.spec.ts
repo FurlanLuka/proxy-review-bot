@@ -1,18 +1,22 @@
 import { describe, expect, it } from 'bun:test';
 import { ANCHOR_TIME, makeDraft, makeLive, makeTracked } from '../test-support/factories.js';
 import {
+	isAutoStartAllowed,
 	isDecisionDeferred,
 	isOwnPullRequest,
 	isViewerRequested,
 	decideApprovalAction,
 	decidePostingAction,
 	decidePullRequestAction,
+	matchesManualStart,
 	MAX_ATTEMPTS_PER_HEAD,
 	QUIET_PERIOD_MS,
 } from './review-decisions.js';
 
-const AUTO = { reviewMode: 'auto', maxRounds: 5 } as const;
-const MANUAL = { reviewMode: 'manual', maxRounds: 5 } as const;
+const RELEASE_RULES = [{ head: 'develop', base: 'master' }];
+const AUTO = { reviewMode: 'auto', maxRounds: 5, manualStartBranches: RELEASE_RULES } as const;
+const MANUAL = { reviewMode: 'manual', maxRounds: 5, manualStartBranches: RELEASE_RULES } as const;
+const RELEASE_LIVE = { headRefName: 'develop', baseRefName: 'master' };
 
 const decide = (overrides: Partial<Parameters<typeof decidePullRequestAction>[0]> = {}) => {
 	return decidePullRequestAction({
@@ -230,6 +234,195 @@ describe('decidePullRequestAction', () => {
 
 	it('PR converted back to draft → none', () => {
 		expect(decide({ live: makeLive({ isDraft: true }) })).toEqual({ kind: 'none' });
+	});
+});
+
+describe('matchesManualStart', () => {
+	it.each([
+		['develop', 'master', true],
+		['feature', 'master', false],
+		['develop', 'main', false],
+		['Develop', 'master', false],
+		['develop', 'Master', false],
+	])('%s → %s: %p', (headRefName, baseRefName, expected) => {
+		expect(matchesManualStart({ headRefName, baseRefName, rules: RELEASE_RULES })).toBe(expected);
+	});
+
+	it('an empty list or an unknown head branch never matches', () => {
+		expect(matchesManualStart({ ...RELEASE_LIVE, rules: [] })).toBe(false);
+		expect(
+			matchesManualStart({ headRefName: null, baseRefName: 'master', rules: RELEASE_RULES }),
+		).toBe(false);
+	});
+});
+
+describe('isAutoStartAllowed', () => {
+	it.each([
+		['auto', false, 'fix-retry', true],
+		['auto', true, 'fix-retry', true],
+		['manual', false, 'fix-retry', false],
+		['manual', true, 'fix-retry', true],
+		['auto', false, 'develop', false],
+		['auto', true, 'develop', false],
+		['manual', true, 'develop', false],
+	] as const)(
+		'%s mode, started %p, head %s → %p',
+		(reviewMode, isStarted, headRefName, expected) => {
+			expect(
+				isAutoStartAllowed({
+					settings: { reviewMode, manualStartBranches: RELEASE_RULES },
+					headRefName,
+					baseRefName: 'master',
+					isStarted,
+				}),
+			).toBe(expected);
+		},
+	);
+});
+
+describe('decidePullRequestAction with Start manually branches', () => {
+	const started = { firstQueuedAt: ANCHOR_TIME - 3 * 60 * 60_000 };
+
+	it('auto mode, not started, release PR already waiting → none, so no per-tick churn', () => {
+		expect(decide({ live: makeLive(RELEASE_LIVE) })).toEqual({ kind: 'none' });
+		expect(
+			decide({
+				live: makeLive(RELEASE_LIVE),
+				tracked: makeTracked({ status: 'waiting_on_author' }),
+			}),
+		).toEqual({ kind: 'mark_needs_review' });
+	});
+
+	it('started release PR with new commits → needs review once, never enqueued', () => {
+		const reviewed = makeTracked({
+			...started,
+			status: 'waiting_on_author',
+			lastReviewedHead: 'head-0',
+		});
+
+		expect(decide({ live: makeLive(RELEASE_LIVE), tracked: reviewed })).toEqual({
+			kind: 'mark_needs_review',
+		});
+		expect(
+			decide({
+				live: makeLive(RELEASE_LIVE),
+				tracked: makeTracked({ ...started, lastReviewedHead: 'head-0' }),
+			}),
+		).toEqual({ kind: 'none' });
+	});
+
+	it('started release PR after an elapsed backoff → needs review, not a retry', () => {
+		expect(
+			decide({
+				live: makeLive(RELEASE_LIVE),
+				tracked: makeTracked({
+					...started,
+					status: 'waiting_on_author',
+					lastError: 'timed out',
+					nextEligibleAt: ANCHOR_TIME - 1,
+				}),
+			}),
+		).toEqual({ kind: 'mark_needs_review' });
+	});
+
+	it('started release PR re-requested on the same commit, even at the round limit → needs review', () => {
+		for (const rounds of [1, 5]) {
+			expect(
+				decide({
+					live: makeLive(RELEASE_LIVE),
+					tracked: makeTracked({
+						...started,
+						status: 'waiting_on_author',
+						isRequested: false,
+						lastReviewedHead: 'head-1',
+						rounds,
+					}),
+				}),
+			).toEqual({ kind: 'mark_needs_review' });
+		}
+	});
+
+	it('started release PR at the round limit with new commits → needs review, not give up', () => {
+		expect(
+			decide({
+				live: makeLive(RELEASE_LIVE),
+				tracked: makeTracked({
+					...started,
+					status: 'waiting_on_author',
+					lastReviewedHead: 'head-0',
+					rounds: 5,
+				}),
+			}),
+		).toEqual({ kind: 'mark_needs_review' });
+	});
+
+	it('a PR on a Start manually branch → never enqueue, whatever its state', () => {
+		const statuses = [
+			'needs_review',
+			'waiting_on_author',
+			'awaiting_approval',
+			'draft_ready',
+			'blocked',
+			'needs_you',
+			'done',
+			'stopped',
+		] as const;
+
+		const enqueued = [];
+
+		for (const status of statuses) {
+			for (const firstQueuedAt of [null, started.firstQueuedAt]) {
+				for (const isRequested of [true, false]) {
+					for (const isRequestedNow of [true, false]) {
+						for (const lastReviewedHead of ['head-0', 'head-1']) {
+							for (const nextEligibleAt of [null, ANCHOR_TIME - 1, ANCHOR_TIME + 60_000]) {
+								for (const rounds of [0, 5]) {
+									for (const settings of [AUTO, MANUAL]) {
+										const state = {
+											status,
+											firstQueuedAt,
+											isRequested,
+											lastReviewedHead,
+											nextEligibleAt,
+											rounds,
+										};
+										const action = decide({
+											settings,
+											isRequestedNow,
+											live: makeLive(RELEASE_LIVE),
+											tracked: makeTracked(state),
+										});
+
+										if (action.kind === 'enqueue') {
+											enqueued.push({ ...state, isRequestedNow, reviewMode: settings.reviewMode });
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		expect(enqueued).toEqual([]);
+	});
+
+	it('a PR outside the list keeps the usual behavior', () => {
+		expect(decide({ live: makeLive({ headRefName: 'develop', baseRefName: 'staging' }) })).toEqual({
+			kind: 'enqueue',
+		});
+		expect(
+			decide({
+				settings: MANUAL,
+				live: makeLive({ headRefName: 'feature', baseRefName: 'master' }),
+				tracked: makeTracked({
+					...started,
+					status: 'waiting_on_author',
+					lastReviewedHead: 'head-0',
+				}),
+			}),
+		).toEqual({ kind: 'enqueue' });
 	});
 });
 

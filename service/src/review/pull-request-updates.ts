@@ -104,6 +104,7 @@ export const buildLiveUpdate = ({
 }: BuildLiveUpdateParams): PullRequestUpdate => ({
 	title: live.title,
 	headSha: live.headSha,
+	headRefName: live.headRefName,
 	baseRefName: live.baseRefName,
 	additions: live.additions,
 	deletions: live.deletions,

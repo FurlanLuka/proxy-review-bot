@@ -25,6 +25,9 @@ public struct PullRequest: Codable, Equatable, Identifiable, Sendable {
     public var isOwn: Bool?
     public var source: PullRequestSource?
     public var isDraft: Bool?
+    public var headRefName: String?
+    public var baseRefName: String?
+    public var isManualStart: Bool?
 
     public var shortName: String {
         "\(repo) #\(number)"
@@ -44,6 +47,18 @@ public struct PullRequest: Codable, Equatable, Identifiable, Sendable {
 
     public var isWaitingForDraftToBeReady: Bool {
         status == .needsReview && isReviewStarted && isDraft == true
+    }
+
+    public var isWaitingForManualStart: Bool {
+        status == .needsReview && isManualStart == true
+    }
+
+    public var branchesText: String? {
+        guard let headRefName, let baseRefName else {
+            return nil
+        }
+
+        return BranchPair(head: headRefName, base: baseRefName).text
     }
 
     public var hasFailedReview: Bool {

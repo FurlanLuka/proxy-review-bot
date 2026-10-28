@@ -32,7 +32,7 @@ interface DecidePullRequestActionParams {
 	isRequestedNow: boolean;
 	myReviewState: MyReviewState;
 	hasManualReview: boolean;
-	settings: Pick<Settings, 'reviewMode' | 'maxRounds'>;
+	settings: Pick<Settings, 'reviewMode' | 'maxRounds' | 'manualStartBranches'>;
 	isPaused: boolean;
 	now: number;
 }
@@ -50,6 +50,45 @@ const isInFlight = (tracked: Pick<TrackedPullRequest, 'status'>): boolean => {
 
 export const isReviewStarted = (tracked: TrackedPullRequest): boolean => {
 	return tracked.firstQueuedAt !== null;
+};
+
+interface MatchesManualStartParams {
+	headRefName: string | null;
+	baseRefName: string | null;
+	rules: Settings['manualStartBranches'];
+}
+
+export const matchesManualStart = ({
+	headRefName,
+	baseRefName,
+	rules,
+}: MatchesManualStartParams): boolean => {
+	if (headRefName === null || baseRefName === null) {
+		return false;
+	}
+
+	return rules.some((rule) => rule.head === headRefName && rule.base === baseRefName);
+};
+
+interface IsAutoStartAllowedParams {
+	settings: Pick<Settings, 'reviewMode' | 'manualStartBranches'>;
+	headRefName: string | null;
+	baseRefName: string | null;
+	isStarted: boolean;
+}
+
+/** A matching PR never starts on its own, even once started: only a click runs a round. */
+export const isAutoStartAllowed = ({
+	settings,
+	headRefName,
+	baseRefName,
+	isStarted,
+}: IsAutoStartAllowedParams): boolean => {
+	if (matchesManualStart({ headRefName, baseRefName, rules: settings.manualStartBranches })) {
+		return false;
+	}
+
+	return settings.reviewMode === 'auto' || isStarted;
 };
 
 interface IsOwnPullRequestParams {
@@ -127,9 +166,20 @@ export const decidePullRequestAction = ({
 		return NONE;
 	}
 
+	const isStarted = isReviewStarted(tracked);
 	const isReRequested = isRequestedNow && !tracked.isRequested;
+	const canStartOnItsOwn = isAutoStartAllowed({
+		settings,
+		headRefName: live.headRefName,
+		baseRefName: live.baseRefName,
+		isStarted,
+	});
 
-	if (isReviewStarted(tracked) && isReRequested && RE_REQUESTABLE_STATUSES.has(tracked.status)) {
+	if (isStarted && isReRequested && RE_REQUESTABLE_STATUSES.has(tracked.status)) {
+		if (!canStartOnItsOwn) {
+			return { kind: 'mark_needs_review' };
+		}
+
 		return tracked.rounds >= settings.maxRounds
 			? giveUpAfterRounds(tracked.rounds)
 			: { kind: 'enqueue' };
@@ -160,6 +210,10 @@ export const decidePullRequestAction = ({
 		return NONE;
 	}
 
+	if (!canStartOnItsOwn) {
+		return tracked.status === 'needs_review' ? NONE : { kind: 'mark_needs_review' };
+	}
+
 	if (tracked.rounds >= settings.maxRounds) {
 		return giveUpAfterRounds(tracked.rounds);
 	}
@@ -171,11 +225,7 @@ export const decidePullRequestAction = ({
 		return NONE;
 	}
 
-	if (settings.reviewMode === 'auto' || isReviewStarted(tracked)) {
-		return { kind: 'enqueue' };
-	}
-
-	return tracked.status === 'needs_review' ? NONE : { kind: 'mark_needs_review' };
+	return { kind: 'enqueue' };
 };
 
 export type PostingAction =

@@ -18,6 +18,7 @@ export interface LivePullRequest extends PullRequestReference {
 	isMerged: boolean;
 	isDraft: boolean;
 	headSha: string;
+	headRefName: string;
 	baseRefName: string;
 	requestedReviewerLogins: string[];
 	additions: number;

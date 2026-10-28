@@ -161,6 +161,17 @@ describe('buildLiveUpdate', () => {
 			}),
 		).toMatchObject({ headChangedAt: 99, isRequested: false, headSha: 'head-2' });
 	});
+
+	it('copies the head and base branch names', () => {
+		expect(
+			buildLiveUpdate({
+				tracked: makeTracked({ headRefName: null }),
+				live: makeLive({ headRefName: 'develop', baseRefName: 'master' }),
+				isRequestedNow: true,
+				now: 99,
+			}),
+		).toMatchObject({ headRefName: 'develop', baseRefName: 'master' });
+	});
 });
 
 describe('planLinkedAdd', () => {

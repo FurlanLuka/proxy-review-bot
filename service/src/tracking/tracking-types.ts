@@ -41,6 +41,7 @@ export interface TrackedPullRequest {
 	status: PullRequestStatus;
 	rounds: number;
 	headSha: string | null;
+	headRefName: string | null;
 	baseRefName: string | null;
 	additions: number;
 	deletions: number;

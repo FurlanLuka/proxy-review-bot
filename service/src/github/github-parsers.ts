@@ -30,7 +30,7 @@ const PULL_REQUEST_SCHEMA = z.object({
 	additions: z.number(),
 	deletions: z.number(),
 	user: z.object({ login: z.string() }),
-	head: z.object({ sha: z.string() }),
+	head: z.object({ sha: z.string(), ref: z.string() }),
 	base: z.object({
 		ref: z.string(),
 		repo: z.object({ full_name: z.string() }).optional(),
@@ -126,6 +126,7 @@ export const parsePullRequest = ({
 		isMerged: pullRequest.merged,
 		isDraft: pullRequest.draft,
 		headSha: pullRequest.head.sha,
+		headRefName: pullRequest.head.ref,
 		baseRefName: pullRequest.base.ref,
 		requestedReviewerLogins: pullRequest.requested_reviewers.map((reviewer) => reviewer.login),
 		additions: pullRequest.additions,

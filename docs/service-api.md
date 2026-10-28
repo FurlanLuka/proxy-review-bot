@@ -58,12 +58,15 @@ Every request carries `Authorization: Bearer <PRB_TOKEN>`. A request without it 
 			"additions": 84,
 			"deletions": 12,
 			"headSha": "abc123",
+			"headRefName": "fix-auth-retry",
+			"baseRefName": "main",
 			"summary": "Retry logic sound, tests cover backoff",
 			"reason": null,
 			"retryAt": null,
 			"isStarted": true,
 			"isOwn": false,
 			"isDraft": false,
+			"isManualStart": false,
 			"source": "requested",
 			"reviewStartedAt": null,
 			"updatedAt": 1793015179000,
@@ -81,7 +84,7 @@ Every request carries `Authorization: Bearer <PRB_TOKEN>`. A request without it 
 - `draft`: on `draft_ready` and `awaiting_approval` rows, `{ "filing": "comment" | "approve", "summary": "…", "commentCount": 3 }`; otherwise null.
 - `summary`: the last one-line review summary.
 - `reason`: why the PR is `needs_you`, `blocked` or failed.
-- `retryAt`: epoch ms when a failed review is tried again, on a `waiting_on_author` row with a `reason`, with `reviewMode: auto` (Start reviews: Automatically) or once the review has started; otherwise null.
+- `retryAt`: epoch ms when a failed review is tried again, on a `waiting_on_author` row with a `reason`, with `reviewMode: auto` (Start reviews: Automatically) or once the review has started, and only when the PR's branches aren't in `manualStartBranches`; otherwise null.
 - `isStarted`: true once the PR's first review was queued (you clicked Review or Retry, or `reviewMode: auto` queued it). A started PR keeps going on its own, even with `reviewMode: manual`: new commits (after the quiet period), a re-request from the author on the same commit, and a failed run after its backoff all queue the next round. With `postReviews: ask` each round is still held as a draft for you. Re-requesting a stopped PR starts over as not started. A re-request is read from the PR's own `requested_reviewers` each sync, not from search, so toggling draft or a lagging search index doesn't count as one; a re-request seen while the bot is paused, running or the PR is a draft is acted on once that ends. A re-request skips the quiet period.
 - `reviewStartedAt`: epoch ms while the status is `reviewing`.
 - `progress`: live progress while a review or reply is running, otherwise null. It's kept in memory only:
@@ -112,7 +115,9 @@ Every request carries `Authorization: Bearer <PRB_TOKEN>`. A request without it 
 - Rows are ordered by `updatedAt` descending. `done` rows are only included for 24 hours.
 
 - `isOwn`: true when you wrote the PR (author matches your `gh` login, ignoring case). GitHub only accepts comment reviews from a PR's author, so on your own PR every draft is a comment (an approve-level result is filed as a comment), approving answers 409 `own_pr`, posting with `APPROVE` or `REQUEST_CHANGES` answers 400 `invalid_draft` with the reason "you can only comment on your own PR", and your own comment reviews there don't count as you taking over.
-- `isDraft`: the PR is a GitHub draft. A started draft PR waits in `needs_review` and is reviewed once it's marked ready.
+- `isDraft`: the PR is a GitHub draft. A started draft PR waits in `needs_review` and is reviewed once it's marked ready. A draft whose branches match `manualStartBranches` keeps waiting for Review after it's marked ready.
+- `headRefName`, `baseRefName`: the PR's head and base branch names; null until the first sync after the PR was found.
+- `isManualStart`: true when the PR waits in `needs_review` because its branches match `manualStartBranches`, so only your click starts a round.
 - `source`: `requested` when the bot found the PR because you were asked to review, `link` when you added it with POST /prs.
 
 ## GET /history
@@ -243,12 +248,17 @@ Posts what you send, which can differ from the stored draft:
 	"answerQuestions": true,
 	"watch": ["acme"],
 	"skip": ["acme/infra"],
-	"toolPaths": { "claude": null, "gh": null, "git": null }
+	"toolPaths": { "claude": null, "gh": null, "git": null },
+	"manualStartBranches": [
+		{ "head": "develop", "base": "master" },
+		{ "head": "develop", "base": "main" }
+	]
 }
 ```
 
 - `reviewMode`: who starts reviews (Start reviews in the app). `manual`: you click Review. `auto`: requested PRs are reviewed on their own.
 - `postReviews`: how finished reviews are posted (Post reviews in the app). `ask`: each review is held as a draft for you. `auto`: comment reviews post on their own, and an approving review follows `autoApprove`. It's independent of `reviewMode`. A body, or an older settings file, without it gets it derived from `reviewMode` (`auto` → `auto`, `manual` → `ask`). Changing it only affects reviews that finish afterwards; drafts already held stay until you act.
+- `manualStartBranches`: head → base pairs (Start manually in the app) whose PRs never start a round on their own, in either start mode and even after you've started them: new commits, a re-request or a failed run's backoff move a started PR to `needs_review` once instead of queueing it, and the round limit doesn't apply. Review, Retry and POST /prs each run one round. Names match exactly (case-sensitive), fork heads included. Defaults to develop → master and develop → main, also for an older settings file without it; an empty list turns it off.
 - `autoApprove`: `off`, `on` or `small`. It only applies when `postReviews` is `auto`; with `off`, an approving review waits for your click.
 - `toolPaths`: each value is a string or null. null means look it up on PATH.
-- PUT takes the full object (`postReviews` may be left out, see above) and returns the saved settings. An invalid body gets 400 `{ "error": "invalid_settings" }` and leaves the saved settings unchanged.
+- PUT takes the full object (`postReviews` and `manualStartBranches` may be left out, see above) and returns the saved settings. An invalid body gets 400 `{ "error": "invalid_settings" }` and leaves the saved settings unchanged.

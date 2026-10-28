@@ -57,6 +57,52 @@ describe('settings', () => {
 		expect(createSettingsStore(path).get()).toEqual(DEFAULT_SETTINGS);
 	});
 
+	it('defaults: develop → master and develop → main start manually', () => {
+		expect(DEFAULT_SETTINGS.manualStartBranches).toEqual([
+			{ head: 'develop', base: 'master' },
+			{ head: 'develop', base: 'main' },
+		]);
+	});
+
+	it('an older settings file without Start manually → the default branches', () => {
+		const path = settingsPath();
+
+		writeFileSync(path, JSON.stringify({ reviewMode: 'auto' }));
+
+		expect(createSettingsStore(path).get().manualStartBranches).toEqual(
+			DEFAULT_SETTINGS.manualStartBranches,
+		);
+	});
+
+	it('Start manually branches are trimmed, and an empty list is kept', () => {
+		const path = settingsPath();
+		const store = createSettingsStore(path);
+
+		store.replace({
+			...DEFAULT_SETTINGS,
+			manualStartBranches: [{ head: ' release ', base: 'prod' }],
+		});
+		expect(createSettingsStore(path).get().manualStartBranches).toEqual([
+			{ head: 'release', base: 'prod' },
+		]);
+
+		store.replace({ ...DEFAULT_SETTINGS, manualStartBranches: [] });
+		expect(createSettingsStore(path).get().manualStartBranches).toEqual([]);
+	});
+
+	it.each([
+		[{ head: 'develop', base: ' ' }],
+		[{ head: 'develop' }],
+		[{ head: 'develop', base: 'master', extra: true }],
+		['develop → master'],
+	])('an invalid Start manually pair %p → defaults', (pair) => {
+		const path = settingsPath();
+
+		writeFileSync(path, JSON.stringify({ reviewMode: 'auto', manualStartBranches: [pair] }));
+
+		expect(createSettingsStore(path).get()).toEqual(DEFAULT_SETTINGS);
+	});
+
 	it('missing file → defaults', () => {
 		expect(createSettingsStore(settingsPath()).get()).toEqual(DEFAULT_SETTINGS);
 	});
