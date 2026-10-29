@@ -38,7 +38,20 @@ jobs:
           VERSION="$VERSION" ZIP_OUTPUT="$PWD/ProxyReviewBot_${VERSION}_macos_arm64.zip" scripts/build-app.sh
 
       - name: Smoke-test the bundled service
-        run: sh scripts/smoke-service-binary.sh app/build/ProxyReviewBot.app/Contents/MacOS/proxy-review-bot-service
+        run: EXPECTED_VERSION="${GITHUB_REF_NAME#v}" sh scripts/smoke-service-binary.sh app/build/ProxyReviewBot.app/Contents/MacOS/proxy-review-bot-service
+
+      - name: Check the installer
+        run: |
+          sh -n install.sh
+          sh tests/install-parsing.sh
+          sh tests/install-update.sh
+
+      - name: Check the zip as the updater will
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          unpacked="$(mktemp -d)"
+          ditto -x -k "app/ProxyReviewBot_${VERSION}_macos_arm64.zip" "$unpacked"
+          sh scripts/check-app-bundle.sh "$unpacked/ProxyReviewBot.app" "$VERSION"
 
       - name: Publish the release
         env:

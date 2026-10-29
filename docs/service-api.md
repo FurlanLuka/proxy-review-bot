@@ -43,6 +43,17 @@ Every request carries `Authorization: Bearer <PRB_TOKEN>`. A request without it 
 		]
 	},
 	"settings": { "...": "same shape as GET /settings" },
+	"update": {
+		"currentVersion": "0.6.0",
+		"latestVersion": "0.6.1",
+		"isUpdateAvailable": true,
+		"canInstall": true,
+		"cannotInstallReason": null,
+		"phase": "idle",
+		"lastCheckedAt": 1793015200000,
+		"error": null,
+		"lastUpdate": null
+	},
 	"pullRequests": [
 		{
 			"id": 1,
@@ -153,6 +164,8 @@ Finished PRs from the last 30 days, newest first, at most 200.
 - A PR the bot gave up on is still open, so it isn't listed.
 - `finishedAt`: epoch ms when the PR reached that state.
 
+- `update`: the service's own updates (see Updates below).
+
 ## Actions
 
 Every action is a POST, returns `{ "ok": true }` with status 200, and returns `{ "error": "<code>" }` on failure.
@@ -168,6 +181,31 @@ Every action is a POST, returns `{ "ok": true }` with status 200, and returns `{
 | `/prs/:id/approve` on your own PR | refused | 409 `own_pr` |
 | `/pause`, `/resume` | pause or resume the whole bot | |
 | `/readiness/check` | re-run the setup checks | |
+| `/update/check` | check GitHub for a newer release now; answers 202 with the `update` state | |
+| `/update/install` | install the newer release (Update now); answers 202 with the `update` state | 409 `no_update`, `cannot_install`, `busy` |
+
+## Updates
+
+The service checks `repos/FurlanLuka/proxy-review-bot/releases/latest` through `gh` (read-only) when it starts, every 6 hours and on `/update/check`. A release counts only when its tag is a plain version (`v1.2.3`) strictly newer than `currentVersion`, so it never downgrades.
+
+- `phase`: `idle`, `checking`, `waiting_for_reviews` (new jobs are held until the running review, reply or approval finishes), `downloading` (download and verify), `installing` (handed to the installer), or `failed` with `error`.
+- **Installing:**
+  1. Download the release's `ProxyReviewBot_<version>_macos_arm64.zip` with `gh release download`.
+  2. Verify it:
+     - its SHA-256 equals the asset's `digest`; a release without one is never installed;
+     - it unpacks;
+     - the bundle id and `CFBundleShortVersionString` match;
+     - it carries `Contents/Resources/install.sh`;
+     - `codesign --verify --deep --strict` passes. The app is signed ad hoc, so this proves the seal is intact, not who made it.
+  3. Run the new version's `install.sh` detached, with an allowlisted env: `PRB_LOCAL_ZIP`, `INSTALL_DIR` (the folder the running app is in) and `PRB_KEEP_LOGIN_ITEM=1`. It stops the app, swaps the bundle and starts it again.
+
+  Its output goes to `update.log` next to the service log.
+- **When it installs on its own:** with `autoUpdate` on, right after a check finds a newer release. A failed install isn't retried until the next check, and a version whose hand-off didn't finish (the old version came back) isn't installed on its own again until 6 hours after that attempt. Update now still installs it.
+- **While jobs are held** for an update, approve and post answer 409 `busy`, and no review or reply starts.
+- **The installer doesn't finish:** if the service is still running 2 minutes after the hand-off, `phase` becomes `failed`.
+- `lastUpdate`: `{ version, didSucceed }` after a restart that followed a hand-off. `didSucceed` is false when the old version came back.
+- `canInstall` is false, with `cannotInstallReason`, unless the service is the compiled binary inside a writable `.../ProxyReviewBot.app` (not a translocated copy). Dev runs can check but not install.
+- Trust: an update can come from whoever can publish a release in this repo, the same as the install command.
 
 ## POST /prs
 
@@ -253,7 +291,8 @@ Posts what you send, which can differ from the stored draft:
 		{ "head": "develop", "base": "master" },
 		{ "head": "develop", "base": "main" }
 	],
-	"claudeModel": null
+	"claudeModel": null,
+	"autoUpdate": true
 }
 ```
 
@@ -263,4 +302,5 @@ Posts what you send, which can differ from the stored draft:
 - `autoApprove`: `off`, `on` or `small`. It only applies when `postReviews` is `auto`; with `off`, an approving review waits for your click.
 - `claudeModel`: the model passed to `claude --model` for reviews, their repair resumes and replies (Claude model in the app), or null for Claude Code's own default. An alias (`opus`, `sonnet`, `haiku`, `fable`) or a full model id; it must start with a letter or digit, up to 100 characters of letters, digits and `._:[]-`. Each job reads it once when it starts, so a change applies to the next run. Proxy's advisor agents pin their own model and aren't affected. A model Claude doesn't know fails the run, and the PR's `reason` is Claude's message. Defaults to null, also for an older settings file without it.
 - `toolPaths`: each value is a string or null. null means look it up on PATH.
+- `autoUpdate`: install newer releases on their own (Install updates automatically in the app). Defaults to true, also for an older settings file without it.
 - PUT takes the full object (`postReviews`, `manualStartBranches` and `claudeModel` may be left out, see above) and returns the saved settings. An invalid body gets 400 `{ "error": "invalid_settings" }` and leaves the saved settings unchanged.

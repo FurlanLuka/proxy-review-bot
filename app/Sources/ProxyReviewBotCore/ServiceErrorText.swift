@@ -23,6 +23,10 @@ public enum ServiceErrorText {
             return reason == "merged" ? "That PR is already merged" : "That PR is already closed"
         case (_, "github_unavailable"):
             return "GitHub isn't reachable right now"
+        case (_, "no_update"):
+            return "You're already on the latest version"
+        case (_, "cannot_install"):
+            return "Updates work only in the installed app"
         case (_, "own_pr"):
             return "You can only comment on your own PR"
         case (404, _):

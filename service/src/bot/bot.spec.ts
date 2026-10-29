@@ -3667,3 +3667,115 @@ describe('the Claude model setting', () => {
 		expect(setup.statusOf(7)?.reason).toBe(message);
 	});
 });
+
+describe('bot: held for an update', () => {
+	it('idle only with nothing running; held jobs never start, released ones do', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+		const gate = createGate();
+
+		setup.github.addPullRequest(7);
+		setup.claude.reviewGate = gate.promise;
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.bot.tick();
+		await setup.claude.waitForReviewCall(1);
+
+		expect(setup.bot.isIdle()).toBe(false);
+
+		setup.bot.setJobsHeld(true);
+		setup.github.addPullRequest(8);
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.clock.now += 60_000;
+		await setup.bot.tick();
+		gate.open();
+		await setup.settle();
+
+		expect(setup.bot.isIdle()).toBe(true);
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.statusOf(8)?.status).toBe('queued');
+
+		setup.bot.setJobsHeld(false);
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+	});
+});
+
+describe('bot: held for an update, clicks and replies', () => {
+	it('a Review click stays queued and no reply job starts; the review runs once released', async () => {
+		const setup = setUp({ reviewMode: 'manual' });
+		const entry = setup.github.addPullRequest(7);
+
+		await setup.tickAndSettle();
+
+		const botRoot = makeComment({
+			databaseId: 1,
+			authorLogin: VIEWER_LOGIN,
+			body: `Finding\n${createBotMarker('head-1')}`,
+		});
+		const question = makeComment({ databaseId: 2, authorLogin: 'ana', body: 'Why is this wrong?' });
+
+		entry.threads = [makeThread([botRoot, question])];
+		setup.bot.setJobsHeld(true);
+
+		expect(setup.bot.requestReview(setup.statusOf(7)?.id ?? 0)).toBe('ok');
+
+		await setup.tickAndSettle();
+
+		expect(setup.statusOf(7)?.status).toBe('queued');
+		expect(setup.claude.reviewCalls).toEqual([]);
+		expect(setup.claude.replyPrompts).toEqual([]);
+
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.bot.setJobsHeld(false);
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+	});
+
+	it('a new question waits while held and is answered once released', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+		const entry = setup.github.addPullRequest(7);
+
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.tickAndSettle();
+
+		const botRoot = makeComment({
+			databaseId: 1,
+			authorLogin: VIEWER_LOGIN,
+			body: `Finding\n${createBotMarker('head-1')}`,
+		});
+		const question = makeComment({ databaseId: 2, authorLogin: 'ana', body: 'Why is this wrong?' });
+
+		entry.threads = [makeThread([botRoot, question])];
+		setup.claude.replyOutcomes.push({ kind: 'result', result: { reply: 'Because X.' } });
+		setup.bot.setJobsHeld(true);
+		await setup.tickAndSettle();
+		await setup.tickAndSettle();
+
+		expect(setup.claude.replyPrompts).toEqual([]);
+
+		setup.bot.setJobsHeld(false);
+		await setup.tickAndSettle();
+		await setup.tickAndSettle();
+
+		expect(setup.github.replies).toHaveLength(1);
+	});
+
+	it('approving or posting while held → busy, nothing posted', async () => {
+		const setup = setUp({ reviewMode: 'manual' });
+
+		setup.github.addPullRequest(7);
+		await setup.tickAndSettle();
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'approve'));
+		setup.bot.requestReview(setup.statusOf(7)?.id ?? 0);
+		await setup.settle();
+
+		const id = setup.statusOf(7)?.id ?? 0;
+
+		setup.bot.setJobsHeld(true);
+
+		expect(await setup.bot.approve(id)).toBe('busy');
+		expect(await setup.bot.postDraft(id, null)).toEqual({ result: 'busy' });
+		expect(setup.github.submissions).toEqual([]);
+	});
+});

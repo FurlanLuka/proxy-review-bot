@@ -13,6 +13,8 @@ public enum ServiceAction: Equatable, Sendable {
     case resume
     case checkReadiness
     case addPullRequest(url: String)
+    case checkForUpdate
+    case installUpdate
 
     public var method: String {
         switch self {
@@ -49,6 +51,10 @@ public enum ServiceAction: Equatable, Sendable {
             return "/readiness/check"
         case .addPullRequest:
             return "/prs"
+        case .checkForUpdate:
+            return "/update/check"
+        case .installUpdate:
+            return "/update/install"
         }
     }
 

@@ -39,6 +39,10 @@ export interface Bot {
 	discardDraft(id: number): ActionResult;
 	setPaused(isPaused: boolean): void;
 	recheckReadiness(): Promise<void>;
+	/** No review, reply or approval is running: safe to stop the service. */
+	isIdle(): boolean;
+	/** Held jobs and posts never start, so an update waits for running ones without new ones racing in. */
+	setJobsHeld(isHeld: boolean): void;
 }
 
 interface ReplyProgress {
@@ -62,6 +66,7 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 	const approvingIds = new Set<number>();
 	const reviewProgressById = new Map<number, ReviewProgress>();
 	const replyProgress: { current: ReplyProgress | null } = { current: null };
+	const jobsHold = { isHeld: false };
 
 	const isPaused = (): boolean => store.getFlag(PAUSED_FLAG) === 'true';
 
@@ -191,7 +196,12 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 	};
 
 	const canRunJobs = (): boolean => {
-		return runtime.readiness.status === 'ready' && !isPaused() && getUsageLimitedUntil() === null;
+		return (
+			runtime.readiness.status === 'ready' &&
+			!isPaused() &&
+			!jobsHold.isHeld &&
+			getUsageLimitedUntil() === null
+		);
 	};
 
 	const startQueuedReviews = (viewerLogin: string): void => {
@@ -287,7 +297,7 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 		busyResult: Result,
 		post: () => Promise<Result>,
 	): Promise<Result> => {
-		if (approvingIds.has(id)) {
+		if (approvingIds.has(id) || jobsHold.isHeld) {
 			return busyResult;
 		}
 
@@ -380,5 +390,14 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 			}
 		},
 		recheckReadiness,
+		isIdle: () => runningJobs.size === 0 && approvingIds.size === 0,
+		setJobsHeld: (isHeld) => {
+			jobsHold.isHeld = isHeld;
+			logger.info('jobs_held_changed', { isHeld });
+
+			if (!isHeld) {
+				startQueuedReviewsNow();
+			}
+		},
 	};
 };

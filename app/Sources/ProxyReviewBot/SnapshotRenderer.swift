@@ -34,9 +34,20 @@ enum SnapshotRenderer {
 
             if let state = model.state {
                 await render(
-                    SettingsFormView(model: model, settings: .constant(state.settings), readiness: state.readiness)
+                    SettingsFormView(model: model, settings: .constant(state.settings), readiness: state.readiness, update: state.update)
                         .frame(width: 520, height: 1180),
                     name: "settings-full",
+                    into: directory
+                )
+                await render(
+                    SettingsFormView(
+                        model: model,
+                        settings: .constant(state.settings),
+                        readiness: state.readiness,
+                        update: UpdateState(currentVersion: "0.6.0", latestVersion: "0.6.1", isUpdateAvailable: true)
+                    )
+                    .frame(width: 520, height: 1340),
+                    name: "settings-updates",
                     into: directory
                 )
             }

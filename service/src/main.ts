@@ -1,8 +1,17 @@
 import { Database } from 'bun:sqlite';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+	accessSync,
+	constants,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createApiHandler } from './api/api.js';
 import { createBot } from './bot/bot.js';
 import { createClaudeClient, installCommandShims } from './claude/claude-client.js';
@@ -14,6 +23,10 @@ import { createLogger } from './logging/logger.js';
 import { checkReadiness, gatherReadinessFacts } from './readiness/readiness.js';
 import { createSettingsStore } from './settings/settings.js';
 import { createStore } from './tracking/store.js';
+import { spawnInstaller } from './updates/installer-process.js';
+import { installLocationOf } from './updates/update-rules.js';
+import { createUpdater } from './updates/updater.js';
+import { SERVICE_VERSION } from './updates/version.js';
 
 const dataDirectory =
 	process.env.PRB_DATA_DIR ?? join(homedir(), 'Library', 'Application Support', 'ProxyReviewBot');
@@ -45,6 +58,16 @@ const acquireLock = (): boolean => {
 	writeFileSync(lockFilePath, String(process.pid));
 
 	return true;
+};
+
+const isWritable = (directory: string): boolean => {
+	try {
+		accessSync(directory, constants.W_OK);
+
+		return true;
+	} catch {
+		return false;
+	}
 };
 
 const resolveTool = (override: string | null, name: string): string | null => {
@@ -120,15 +143,46 @@ const bot = createBot({
 	sleep: (milliseconds) => Bun.sleep(milliseconds),
 });
 
+const updater = createUpdater({
+	runCommand,
+	spawnInstaller,
+	flags: store,
+	settingsStore,
+	jobs: { isIdle: bot.isIdle, setHeld: bot.setJobsHeld },
+	logger,
+	now: Date.now,
+	currentVersion: SERVICE_VERSION,
+	installLocation: installLocationOf({
+		servicePath: realpathSync(process.execPath),
+		isCompiled: isCompiledBinary,
+		isWritable,
+	}),
+	ghPath,
+	gitPath,
+	updatesDirectory: join(dataDirectory, 'updates'),
+	updateLogPath: join(dirname(logFilePath), 'update.log'),
+	baseEnv,
+});
+
 const server = Bun.serve({
 	hostname: '127.0.0.1',
 	port: 0,
-	fetch: createApiHandler({ bot, settingsStore, token, logger }),
+	fetch: createApiHandler({ bot, updater, settingsStore, token, logger }),
 });
+
+const tickAll = async (): Promise<void> => {
+	await bot.tick();
+
+	try {
+		await updater.tick();
+	} catch (error) {
+		logger.error('update_tick_failed', { error });
+	}
+};
 
 const scheduleTick = (): void => {
 	setTimeout(async () => {
-		await bot.tick();
+		await tickAll();
 		scheduleTick();
 	}, settingsStore.get().pollIntervalSeconds * 1000);
 };
@@ -143,6 +197,8 @@ const shutdown = (reason: string): void => {
 
 const resetCount = store.resetInterruptedReviews(Date.now());
 
+updater.start();
+
 logger.info('service_started', {
 	port: server.port,
 	dataDirectory,
@@ -151,6 +207,8 @@ logger.info('service_started', {
 	gitPath,
 	resetCount,
 	isCompiledBinary,
+	version: SERVICE_VERSION,
+	canInstallUpdates: updater.getState().canInstall,
 	hasProvidedToken: process.env.PRB_TOKEN !== undefined,
 });
 process.stdout.write(`${JSON.stringify({ event: 'listening', port: server.port })}\n`);
@@ -163,5 +221,5 @@ if (!process.stdin.isTTY) {
 process.on('SIGTERM', () => shutdown('sigterm'));
 process.on('SIGINT', () => shutdown('sigint'));
 
-await bot.tick();
+await tickAll();
 scheduleTick();

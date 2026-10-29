@@ -5,15 +5,18 @@ import type { BotState } from '../bot/state-view.js';
 import { DEFAULT_SETTINGS } from '../settings/settings.js';
 import { makeDraft } from '../test-support/factories.js';
 import { createTestHarness, VIEWER_LOGIN } from '../test-support/fakes.js';
+import { createUpdaterHarness } from '../test-support/update-fakes.js';
 import { createApiHandler } from './api.js';
 
 const TOKEN = 'test-token';
 
-const setUp = () => {
+const setUp = (updaterHarness = createUpdaterHarness()) => {
 	const harness = createTestHarness();
 	const bot = createBot(harness.dependencies);
+	const updater = updaterHarness.create();
 	const handle = createApiHandler({
 		bot,
+		updater,
 		settingsStore: harness.dependencies.settingsStore,
 		token: TOKEN,
 		logger: harness.dependencies.logger,
@@ -39,7 +42,7 @@ const setUp = () => {
 		);
 	};
 
-	return { ...harness, bot, call, callRaw };
+	return { ...harness, bot, updater, updaterHarness, call, callRaw };
 };
 
 describe('api', () => {
@@ -62,6 +65,7 @@ describe('api', () => {
 			'pullRequests',
 			'readiness',
 			'settings',
+			'update',
 			'usageLimitedUntil',
 			'viewerLogin',
 		]);
@@ -223,12 +227,67 @@ describe('GET /history', () => {
 	});
 });
 
+describe('api: updates', () => {
+	it('GET /state carries the update state', async () => {
+		const { call } = setUp();
+		const state = (await (await call('GET', '/state')).json()) as { update: unknown };
+
+		expect(state.update).toMatchObject({
+			currentVersion: '0.6.0',
+			latestVersion: null,
+			isUpdateAvailable: false,
+			canInstall: true,
+			phase: 'idle',
+		});
+	});
+
+	it('POST /update/check → 202 and the check runs', async () => {
+		const { call, updater } = setUp();
+		const response = await call('POST', '/update/check');
+
+		expect(response.status).toBe(202);
+
+		await updater.check();
+
+		expect(updater.getState().latestVersion).toBe('0.6.1');
+	});
+
+	it('POST /update/install: nothing to install → 409 no_update; available → 202', async () => {
+		const { call, updater } = setUp();
+		const early = await call('POST', '/update/install');
+
+		expect(early.status).toBe(409);
+		expect(await early.json()).toEqual({ error: 'no_update' });
+
+		await updater.check();
+
+		const response = await call('POST', '/update/install');
+
+		expect(response.status).toBe(202);
+
+		await updater.waitForIdle();
+	});
+
+	it('POST /update/install in a dev run → 409 cannot_install', async () => {
+		const { call } = setUp(
+			createUpdaterHarness({
+				installLocation: { canInstall: false, reason: 'Updates work only in the installed app' },
+			}),
+		);
+		const response = await call('POST', '/update/install');
+
+		expect(response.status).toBe(409);
+		expect(await response.json()).toEqual({ error: 'cannot_install' });
+	});
+});
+
 describe('api request logging', () => {
 	it('routine GET /state polls are not logged; other requests are', async () => {
 		const harness = createTestHarness();
 		const events: string[] = [];
 		const handle = createApiHandler({
 			bot: createBot(harness.dependencies),
+			updater: createUpdaterHarness().create(),
 			settingsStore: harness.dependencies.settingsStore,
 			token: TOKEN,
 			logger: {

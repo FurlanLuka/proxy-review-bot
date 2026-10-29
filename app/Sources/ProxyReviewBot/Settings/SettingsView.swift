@@ -11,7 +11,13 @@ struct SettingsView: View {
     var body: some View {
         Group {
             if let draft = Binding($draft) {
-                SettingsFormView(model: model, settings: draft, readiness: model.state?.readiness, errorMessage: errorMessage)
+                SettingsFormView(
+                    model: model,
+                    settings: draft,
+                    readiness: model.state?.readiness,
+                    update: model.state?.update,
+                    errorMessage: errorMessage
+                )
             } else {
                 Text("Waiting for the service…")
                     .foregroundStyle(.secondary)

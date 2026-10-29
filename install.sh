@@ -60,8 +60,11 @@ uninstall() {
 }
 
 check_tools() {
-    command -v gh >/dev/null 2>&1 || fail "GitHub CLI not found. Install it with: brew install gh, then run: gh auth login"
-    command -v git >/dev/null 2>&1 || fail "git not found. Install it with: xcode-select --install"
+    # A local zip (the app's own updater) needs no download; the app checks gh and git itself.
+    if [ -z "$PRB_LOCAL_ZIP" ]; then
+        command -v gh >/dev/null 2>&1 || fail "GitHub CLI not found. Install it with: brew install gh, then run: gh auth login"
+        command -v git >/dev/null 2>&1 || fail "git not found. Install it with: xcode-select --install"
+    fi
 
     if ! command -v claude >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/claude" ]; then
         say "Note: Claude Code isn't installed yet. The app will show how to set it up."
@@ -105,9 +108,33 @@ download_release() {
         "$ASSET_URL" -o "$TMP/app.zip"
 }
 
+restore_after_failure() {
+    STATUS=$?
+    rm -rf "$TMP"
+
+    if [ "$STATUS" -eq 0 ]; then
+        return
+    fi
+
+    rm -rf "$APP_PATH.new"
+
+    if [ ! -d "$APP_PATH" ] && [ -d "$APP_PATH.old" ]; then
+        if mv "$APP_PATH.old" "$APP_PATH"; then
+            say "The install failed, so the previous version was put back."
+        else
+            say "The install failed, and the previous version is still at $APP_PATH.old."
+        fi
+    fi
+
+    if [ -n "${STOPPED_APP:-}" ] && [ -d "$APP_PATH" ]; then
+        say "Starting the app again."
+        start_app || true
+    fi
+}
+
 install_app() {
     TMP=$(mktemp -d)
-    trap 'rm -rf "$TMP"' EXIT
+    trap restore_after_failure EXIT
 
     if [ -n "$PRB_LOCAL_ZIP" ]; then
         say "Installing from $PRB_LOCAL_ZIP..."
@@ -119,12 +146,33 @@ install_app() {
     ditto -x -k "$TMP/app.zip" "$TMP/unpacked"
     [ -d "$TMP/unpacked/$APP_NAME" ] || fail "The download doesn't contain $APP_NAME."
 
-    stop_running_app
+    # Copy beside the old app, then swap by renames, so a failure can always put the old one back.
     mkdir -p "$INSTALL_DIR"
-    rm -rf "$APP_PATH"
-    ditto "$TMP/unpacked/$APP_NAME" "$APP_PATH"
-    xattr -dr com.apple.quarantine "$APP_PATH" 2>/dev/null || true
+    # An earlier install that stopped mid-swap can leave only the .old copy: put it back first.
+    [ -d "$APP_PATH" ] || [ ! -d "$APP_PATH.old" ] || mv "$APP_PATH.old" "$APP_PATH"
+    rm -rf "$APP_PATH.new" "$APP_PATH.old"
+    ditto "$TMP/unpacked/$APP_NAME" "$APP_PATH.new"
+    xattr -dr com.apple.quarantine "$APP_PATH.new" 2>/dev/null || true
+
+    stop_running_app
+    STOPPED_APP=1
+
+    if [ -d "$APP_PATH" ]; then
+        mv "$APP_PATH" "$APP_PATH.old"
+    fi
+
+    mv "$APP_PATH.new" "$APP_PATH"
+    rm -rf "$APP_PATH.old"
     say "Installed $APP_PATH"
+}
+
+register_login_item() {
+    if [ -n "${PRB_KEEP_LOGIN_ITEM:-}" ]; then
+        say "Kept your Launch at login setting."
+        return
+    fi
+
+    enable_login_item
 }
 
 enable_login_item() {
@@ -158,7 +206,7 @@ main() {
 
     check_tools
     install_app
-    enable_login_item
+    register_login_item
 
     if [ -n "$PRB_NO_LAUNCH" ]; then
         say "Installed without launching (PRB_NO_LAUNCH is set)."

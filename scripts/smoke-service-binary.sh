@@ -17,6 +17,12 @@ fail() {
     exit 1
 }
 
+bundle="$(dirname "$(dirname "$(dirname "$binary")")")"
+
+case "$bundle" in
+    *.app) sh "$(dirname "$0")/check-app-bundle.sh" "$bundle" "${EXPECTED_VERSION:-}" ;;
+esac
+
 mkdir -p "$repository" "$tools" "$data"
 printf '#!/bin/sh\necho "$@ cwd=$PWD leak=${PRB_LEAK:-}" >> "%s"\nexit 7\n' "$calls" > "$tools/gh"
 cp "$tools/gh" "$tools/git"

@@ -19,6 +19,23 @@ describe('settings', () => {
 		});
 	});
 
+	it('defaults: updates install automatically, also for an older file without the field', () => {
+		const path = settingsPath();
+
+		writeFileSync(path, JSON.stringify({ reviewMode: 'manual' }));
+
+		expect(DEFAULT_SETTINGS.autoUpdate).toBe(true);
+		expect(createSettingsStore(path).get().autoUpdate).toBe(true);
+	});
+
+	it('updates off is kept', () => {
+		const path = settingsPath();
+
+		createSettingsStore(path).replace({ ...DEFAULT_SETTINGS, autoUpdate: false });
+
+		expect(createSettingsStore(path).get().autoUpdate).toBe(false);
+	});
+
 	it('defaults: Post reviews is Ask me first', () => {
 		expect(DEFAULT_SETTINGS.postReviews).toBe('ask');
 	});

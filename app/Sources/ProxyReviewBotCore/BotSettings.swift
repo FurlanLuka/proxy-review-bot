@@ -11,6 +11,7 @@ public struct BotSettings: Codable, Equatable, Sendable {
     public var toolPaths: ToolPaths
     public var manualStartBranches: [BranchPair]?
     public var claudeModel: String?
+    public var autoUpdate: Bool?
 }
 
 public enum ReviewMode: String, Codable, CaseIterable, Sendable {

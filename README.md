@@ -65,6 +65,10 @@ can also limit which orgs and repos it watches, and set the round limit and how 
 **Claude model** picks the model reviews and replies run on (Claude Code's default, Fable, Opus,
 Sonnet or Haiku); proxy's advisors keep their own model.
 
+It keeps itself up to date: it checks for a new release every 6 hours and installs it once no
+review is running, then restarts. **Updates** in Settings shows the version, has an **Update now**
+button, and turns automatic installs off.
+
 Release PRs never start on their own. **Start manually** in Settings lists the head → base branches
 the bot leaves for you, `develop → master` and `develop → main` by default. Those PRs wait until you
 click Review, and after each round the next one waits for your click too.
@@ -83,6 +87,10 @@ click Review, and after each round the next one waits for your click too.
 - **It steps back when you step in.** If you review a PR yourself, the bot stops on it.
 - **Its posts are marked**, with a "🤖 review bot" line and a hidden marker, so it never answers
   itself or posts the same review twice.
+- **Updates come only from this repo's releases**, so whoever can publish a release here can update
+  your app, as with the install command. Each download is checked against the release's checksum
+  and never installed while a review runs. Turn off **Install updates automatically** to update
+  only when you click.
 - **Reviews bill your Claude subscription.** `ANTHROPIC_API_KEY` is removed from every run.
 - **A review that finishes without a usable answer isn't thrown away.** The bot resumes that same
   Claude session and asks for the result (up to 5 tries) instead of reviewing again, and anything
@@ -139,7 +147,8 @@ the log.
 
 ## Updating and uninstalling
 
-Run the install command again to update; your settings and history stay. To uninstall, add
+From 0.6.0 on the app updates itself, from this repo's GitHub releases. Older versions update by
+running the install command again; your settings and history stay. To uninstall, add
 `--uninstall`, and `--purge` to also delete settings, the database and logs:
 
 ```bash

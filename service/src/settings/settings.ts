@@ -32,6 +32,7 @@ export const SETTINGS_SCHEMA = z
 		maxRounds: z.number().int().min(1).max(20).default(5),
 		pollIntervalSeconds: z.number().int().min(15).max(3600).default(60),
 		answerQuestions: z.boolean().default(true),
+		autoUpdate: z.boolean().default(true),
 		watch: z.array(z.string().min(1)).default([]),
 		skip: z.array(z.string().min(1)).default([]),
 		manualStartBranches: z.array(BRANCH_PAIR_SCHEMA).default(DEFAULT_MANUAL_START_BRANCHES),

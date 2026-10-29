@@ -8,6 +8,7 @@ struct SettingsFormView: View {
     @ObservedObject var model: BotModel
     @Binding var settings: BotSettings
     let readiness: Readiness?
+    let update: UpdateState?
     var errorMessage: String?
 
     var body: some View {
@@ -131,6 +132,10 @@ struct SettingsFormView: View {
                     .fixedSize(horizontal: true, vertical: false)
             }
 
+            if let update {
+                updatesSection(update)
+            }
+
             if let readiness {
                 Section("Status") {
                     if readiness.checks.isEmpty {
@@ -147,6 +152,43 @@ struct SettingsFormView: View {
             UninstallSection(model: model)
         }
         .formStyle(.grouped)
+    }
+
+    private func updatesSection(_ update: UpdateState) -> some View {
+        Section {
+            LabeledContent {
+                Button(update.button.title) {
+                    switch update.button {
+                    case .check:
+                        model.checkForUpdate()
+                    case .install:
+                        model.installUpdate()
+                    }
+                }
+                .disabled(!update.isButtonEnabled)
+            } label: {
+                Text(update.statusText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Toggle("Install updates automatically", isOn: autoUpdate)
+        } header: {
+            Text("Updates")
+        } footer: {
+            if let reason = update.cannotInstallReason {
+                Text(reason)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+        }
+    }
+
+    private var autoUpdate: Binding<Bool> {
+        Binding {
+            settings.autoUpdate ?? true
+        } set: { isOn in
+            settings.autoUpdate = isOn
+        }
     }
 
     private var manualStartEntries: Binding<[String]> {

@@ -49,3 +49,4 @@ jobs:
         run: |
           sh -n install.sh
           sh tests/install-parsing.sh
+          sh tests/install-update.sh

@@ -18,6 +18,7 @@ final class BotModel: ObservableObject {
     private var client: ServiceClient?
     private var pollingTask: Task<Void, Never>?
     private var notificationPlanner = NotificationPlanner()
+    private var hasAnnouncedUpdate = false
 
     var attentionCount: Int {
         state.map { PullRequestSections.attentionCount(of: $0.pullRequests) } ?? 0
@@ -74,6 +75,14 @@ final class BotModel: ObservableObject {
 
     func checkReadiness() {
         perform(.checkReadiness, on: nil)
+    }
+
+    func checkForUpdate() {
+        perform(.checkForUpdate, on: nil)
+    }
+
+    func installUpdate() {
+        perform(.installUpdate, on: nil)
     }
 
     func saveSettings(_ settings: BotSettings) async throws {
@@ -152,9 +161,19 @@ final class BotModel: ObservableObject {
             state = newState
             connection = .connected
             notifier.post(notificationPlanner.notices(for: newState.pullRequests, readiness: newState.readiness))
+            announceUpdate(newState.update)
         } catch {
             connection = .unavailable(message: "Can't reach the service")
         }
+    }
+
+    private func announceUpdate(_ update: UpdateState?) {
+        guard !hasAnnouncedUpdate, let notice = update?.successNotice else {
+            return
+        }
+
+        hasAnnouncedUpdate = true
+        notifier.post([notice])
     }
 
     func perform(_ action: ServiceAction, on pullRequest: PullRequest?) {

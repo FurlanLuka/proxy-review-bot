@@ -2,9 +2,11 @@ import type { AddPullRequestResult } from '../bot/add-pull-request.js';
 import type { Bot } from '../bot/bot.js';
 import type { Logger } from '../logging/logger.js';
 import type { SettingsStore } from '../settings/settings.js';
+import type { Updater } from '../updates/updater.js';
 
 interface CreateApiHandlerParams {
 	bot: Bot;
+	updater: Updater;
 	settingsStore: SettingsStore;
 	token: string;
 	logger: Logger;
@@ -58,12 +60,18 @@ const actionResponse = (outcome: string | { result: string; reason?: string }): 
 			: json({ error: result }, 409);
 };
 
-export const createApiHandler = ({ bot, settingsStore, token, logger }: CreateApiHandlerParams) => {
+export const createApiHandler = ({
+	bot,
+	updater,
+	settingsStore,
+	token,
+	logger,
+}: CreateApiHandlerParams) => {
 	const route = async (request: Request, path: string): Promise<Response> => {
 		const method = request.method;
 
 		if (method === 'GET' && path === '/state') {
-			return json(bot.getState());
+			return json({ ...bot.getState(), update: updater.getState() });
 		}
 
 		if (method === 'GET' && path === '/history') {
@@ -105,6 +113,18 @@ export const createApiHandler = ({ bot, settingsStore, token, logger }: CreateAp
 
 		if (path === '/prs') {
 			return addResponse(await bot.addPullRequest(readUrl(await request.json().catch(() => null))));
+		}
+
+		if (path === '/update/check') {
+			void updater.check();
+
+			return json(updater.getState(), 202);
+		}
+
+		if (path === '/update/install') {
+			const result = updater.install('manual');
+
+			return result === 'ok' ? json(updater.getState(), 202) : json({ error: result }, 409);
 		}
 
 		if (path === '/readiness/check') {

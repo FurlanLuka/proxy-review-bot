@@ -4,12 +4,16 @@ set -euo pipefail
 app_directory="$(cd "$(dirname "$0")/.." && pwd)"
 service_source_directory="$(cd "$app_directory/../service" && pwd)"
 bun_executable="$(command -v bun || echo "$HOME/.bun/bin/bun")"
-version="${VERSION:-0.5.3}"
+version="${VERSION:-0.6.0}"
+repository_directory="$(cd "$app_directory/.." && pwd)"
+icon_file="$app_directory/Resources/AppIcon.icns"
 bundle_directory="$app_directory/build/ProxyReviewBot.app"
 contents_directory="$bundle_directory/Contents"
 service_binary="$contents_directory/MacOS/proxy-review-bot-service"
 
 cd "$app_directory"
+
+[ -f "$icon_file" ] || { echo "Missing $icon_file: run app/scripts/make-icon.swift" >&2; exit 1; }
 
 swift build -c release
 binary_directory="$(swift build -c release --show-bin-path)"
@@ -17,6 +21,8 @@ binary_directory="$(swift build -c release --show-bin-path)"
 rm -rf "$bundle_directory"
 mkdir -p "$contents_directory/MacOS" "$contents_directory/Resources"
 cp "$binary_directory/ProxyReviewBot" "$contents_directory/MacOS/ProxyReviewBot"
+cp "$icon_file" "$contents_directory/Resources/AppIcon.icns"
+cp "$repository_directory/install.sh" "$contents_directory/Resources/install.sh"
 
 cat > "$contents_directory/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -31,6 +37,8 @@ cat > "$contents_directory/Info.plist" <<PLIST
 	<string>Proxy Review Bot</string>
 	<key>CFBundleExecutable</key>
 	<string>ProxyReviewBot</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -53,6 +61,7 @@ PLIST
 	--sourcemap \
 	--no-compile-autoload-dotenv \
 	--no-compile-autoload-bunfig \
+	--define "process.env.PRB_BUILD_VERSION=\"$version\"" \
 	--outfile "$service_binary"
 rm -f "$service_binary.map"
 
