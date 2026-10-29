@@ -32,7 +32,7 @@ struct SettingsFormView: View {
                 .id(Self.errorSectionID)
             }
 
-            Section("Reviews") {
+            Section {
                 Picker("Start reviews", selection: $settings.reviewMode) {
                     Text("Manually").tag(ReviewMode.manual)
                     Text("Automatically").tag(ReviewMode.auto)
@@ -89,6 +89,19 @@ struct SettingsFormView: View {
                         Text(Self.pollIntervalTitle(seconds: seconds)).tag(seconds)
                     }
                 }
+
+                Picker("Claude model", selection: $settings.claudeModel) {
+                    ForEach(ClaudeModelChoice.choices(saved: settings.claudeModel), id: \.self) { choice in
+                        Text(choice.title).tag(choice.model)
+                    }
+                }
+            } header: {
+                Text("Reviews")
+            } footer: {
+                Text("Claude model is used for the main review session and replies.\nProxy's advisors use their own model.")
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: true, vertical: false)
             }
 
             Section("Replies") {

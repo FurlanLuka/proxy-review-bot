@@ -74,7 +74,7 @@ const findPendingReply = async ({
 };
 
 export const runNextReplyJob = async (params: ReplyJobParams): Promise<JobOutcome | null> => {
-	const { store, github, claude, clones, logger, now } = params.dependencies;
+	const { store, github, claude, clones, logger, now, settingsStore } = params.dependencies;
 	const pending = await findPendingReply(params);
 
 	if (pending === null) {
@@ -95,6 +95,7 @@ export const runNextReplyJob = async (params: ReplyJobParams): Promise<JobOutcom
 		const outcome = await runInClone(clone, (clonePath) =>
 			claude.runReply({
 				clonePath,
+				model: settingsStore.get().claudeModel,
 				prompt: buildReplyPrompt({
 					reference: tracked,
 					clonePath,

@@ -41,6 +41,7 @@ describe('createClaudeClient().runReview abort', () => {
 		const outcome = await client.runReview({
 			pullRequestUrl: 'https://github.com/acme/api/pull/7',
 			clonePath: '/clone',
+			model: null,
 			signal: controller.signal,
 		});
 
@@ -82,6 +83,7 @@ describe('createClaudeClient().runReview failure logging', () => {
 		const outcome = await client.runReview({
 			pullRequestUrl: 'https://github.com/acme/api/pull/7',
 			clonePath: '/clone',
+			model: null,
 		});
 
 		expect(outcome.kind).toBe('failed');
@@ -124,6 +126,7 @@ describe('createClaudeClient().runReview failure logging', () => {
 		await client.runReview({
 			pullRequestUrl: 'https://github.com/acme/api/pull/7',
 			clonePath: '/clone',
+			model: null,
 		});
 
 		const savedPath = String(warnings[0]?.failedResultPath);
@@ -185,6 +188,7 @@ describe('createClaudeClient().runReview', () => {
 		const outcome = await client.runReview({
 			pullRequestUrl: 'https://github.com/acme/api/pull/7',
 			clonePath: '/clone',
+			model: null,
 			onProgress: (progress) => updates.push(progress),
 		});
 
@@ -201,6 +205,51 @@ describe('createClaudeClient().runReview', () => {
 		expect(updates.length).toBeLessThan(RECORDED_STREAM.trim().split('\n').length);
 		expect(calls[0]?.command).toBe('caffeinate');
 		expect(calls[0]?.args.slice(0, 3)).toEqual(['-i', '/bin/claude', '-p']);
+	});
+});
+
+describe('createClaudeClient() model logging', () => {
+	const UNKNOWN_MODEL_STREAM = readFileSync(
+		new URL('../review/fixtures/claude-stream-unknown-model.ndjson', import.meta.url),
+		'utf8',
+	);
+
+	it('logs the chosen model on start and the model Claude resolved on finish', async () => {
+		const events: { event: string; fields: Record<string, unknown> | undefined }[] = [];
+
+		const record = (event: string, fields?: Record<string, unknown>) => {
+			events.push({ event, fields });
+		};
+
+		const client = createClaudeClient({
+			claudePath: '/bin/claude',
+			shimDirectory: '/shims',
+			failedResultsDirectory: mkdtempSync(join(tmpdir(), 'prb-failed-')),
+			runCommand: async () => ({
+				exitCode: 1,
+				stdout: UNKNOWN_MODEL_STREAM,
+				stderr: '',
+				isTimedOut: false,
+				durationMs: 1,
+			}),
+			logger: { ...createSilentLogger(), info: record, warn: record },
+			baseEnv: { PATH: '/usr/bin' },
+		});
+
+		await client.runReview({
+			pullRequestUrl: 'https://github.com/acme/api/pull/7',
+			clonePath: '/clone',
+			model: 'prb-bogus-model',
+		});
+
+		expect(events.find(({ event }) => event === 'claude_run_started')?.fields).toMatchObject({
+			kind: 'review',
+			model: 'prb-bogus-model',
+		});
+		expect(events.find(({ event }) => event === 'claude_run_finished')?.fields).toMatchObject({
+			outcome: 'failed',
+			resolvedModel: 'prb-bogus-model',
+		});
 	});
 });
 
@@ -257,6 +306,7 @@ describe('session repair', () => {
 		const outcome = await client.runReview({
 			pullRequestUrl: 'https://github.com/acme/api/pull/7',
 			clonePath: '/clone',
+			model: null,
 		});
 
 		expect(outcome).toMatchObject({ kind: 'failed', repairSessionId: INIT_SESSION });
@@ -272,6 +322,7 @@ describe('session repair', () => {
 		const outcome = await client.runReview({
 			pullRequestUrl: 'https://github.com/acme/api/pull/7',
 			clonePath: '/clone',
+			model: null,
 		});
 
 		expect(outcome).toMatchObject({ kind: 'failed', repairSessionId: SESSION });
@@ -284,6 +335,7 @@ describe('session repair', () => {
 		const outcome = await client.runReview({
 			pullRequestUrl: 'https://github.com/acme/api/pull/7',
 			clonePath: '/clone',
+			model: null,
 		});
 
 		expect(outcome).toMatchObject({ kind: 'failed' });
@@ -302,11 +354,13 @@ describe('session repair', () => {
 		await reviewClient.runReview({
 			pullRequestUrl: 'https://github.com/acme/api/pull/7',
 			clonePath: '/worktree',
+			model: null,
 		});
 
 		const outcome = await repairClient.runRepair({
 			sessionId: SESSION,
 			clonePath: '/worktree',
+			model: null,
 			attempt: 2,
 		});
 		const reviewArgs = reviewCalls[0]?.args ?? [];

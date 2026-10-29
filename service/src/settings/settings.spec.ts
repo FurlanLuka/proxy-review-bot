@@ -103,6 +103,40 @@ describe('settings', () => {
 		expect(createSettingsStore(path).get()).toEqual(DEFAULT_SETTINGS);
 	});
 
+	it('defaults: no Claude model, so Claude Code’s default applies', () => {
+		expect(DEFAULT_SETTINGS.claudeModel).toBeNull();
+	});
+
+	it.each([
+		[' sonnet ', 'sonnet'],
+		['claude-opus-5-5', 'claude-opus-5-5'],
+		['opus[1m]', 'opus[1m]'],
+		[null, null],
+	])('Claude model %p → kept as %p', (claudeModel, expected) => {
+		const path = settingsPath();
+
+		createSettingsStore(path).replace({ ...DEFAULT_SETTINGS, claudeModel });
+
+		expect(createSettingsStore(path).get().claudeModel).toBe(expected);
+	});
+
+	it.each([['-x'], ['--x'], [''], ['two words'], ['a'.repeat(101)]])(
+		'an invalid Claude model %p → rejected',
+		(claudeModel) => {
+			expect(
+				createSettingsStore(settingsPath()).replace({ ...DEFAULT_SETTINGS, claudeModel }),
+			).toBeNull();
+		},
+	);
+
+	it('an older settings file without a Claude model → none', () => {
+		const path = settingsPath();
+
+		writeFileSync(path, JSON.stringify({ reviewMode: 'auto' }));
+
+		expect(createSettingsStore(path).get().claudeModel).toBeNull();
+	});
+
 	it('missing file → defaults', () => {
 		expect(createSettingsStore(settingsPath()).get()).toEqual(DEFAULT_SETTINGS);
 	});

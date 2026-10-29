@@ -19,6 +19,7 @@ export interface RepairContext {
 	logger: Logger;
 	pullRequestUrl: string;
 	clonePath: string;
+	model: string | null;
 	signal?: AbortSignal;
 	onProgress?: (progress: ReviewProgress) => void;
 	isReleased: () => boolean;
@@ -42,7 +43,7 @@ const repairReview = async ({
 	sessionId,
 	lastProgress,
 }: RepairReviewParams): Promise<RepairResult> => {
-	const { claude, sleep, now, logger, clonePath, signal } = context;
+	const { claude, sleep, now, logger, clonePath, model, signal } = context;
 	const attempts = Array.from({ length: MAX_REPAIR_ATTEMPTS }, (_, index) => index + 1);
 	const current = { sessionId };
 
@@ -61,6 +62,7 @@ const repairReview = async ({
 		const outcome = await claude.runRepair({
 			sessionId: current.sessionId,
 			clonePath,
+			model,
 			attempt,
 			signal,
 		});
@@ -139,6 +141,7 @@ export const reviewWithRepair = async ({
 	const reviewed = await context.claude.runReview({
 		pullRequestUrl: context.pullRequestUrl,
 		clonePath: context.clonePath,
+		model: context.model,
 		onProgress: (progress) => {
 			latest.progress = progress;
 			context.onProgress?.(progress);

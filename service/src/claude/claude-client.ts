@@ -6,6 +6,7 @@ import { applyStreamLine, createReviewProgress } from '../review/review-progress
 import type { ReviewProgress } from '../review/review-progress.js';
 import {
 	parseClaudeOutput,
+	resolvedModelOf,
 	REPLY_RESULT_JSON_SCHEMA,
 	REPLY_RESULT_SCHEMA,
 	REVIEW_RESULT_JSON_SCHEMA,
@@ -30,6 +31,7 @@ const KEPT_FAILED_RESULTS = 10;
 interface RunReviewParams {
 	pullRequestUrl: string;
 	clonePath: string;
+	model: string | null;
 	onProgress?: (progress: ReviewProgress) => void;
 	signal?: AbortSignal;
 }
@@ -37,11 +39,13 @@ interface RunReviewParams {
 interface RunReplyParams {
 	prompt: string;
 	clonePath: string;
+	model: string | null;
 }
 
 export interface RunRepairParams {
 	sessionId: string;
 	clonePath: string;
+	model: string | null;
 	attempt: number;
 	signal?: AbortSignal;
 }
@@ -132,6 +136,7 @@ interface CreateClaudeClientParams {
 
 interface RunClaudeParams<Result> {
 	kind: ClaudeRunKind;
+	model: string | null;
 	args: string[];
 	clonePath: string;
 	parse: (output: CommandResult) => ClaudeRunOutcome<Result>;
@@ -171,13 +176,14 @@ export const createClaudeClient = ({
 
 	const runClaude = async <Result>({
 		kind,
+		model,
 		args,
 		clonePath,
 		parse,
 		onStdoutLine,
 		signal,
 	}: RunClaudeParams<Result>): Promise<ClaudeRunOutcome<Result>> => {
-		logger.info('claude_run_started', { kind, clonePath });
+		logger.info('claude_run_started', { kind, model, clonePath });
 		const output = await runCommand({
 			command: 'caffeinate',
 			args: ['-i', claudePath, ...args],
@@ -196,6 +202,7 @@ export const createClaudeClient = ({
 			isAborted: signal?.aborted ?? false,
 			durationMs: output.durationMs,
 			outcome: outcome.kind,
+			resolvedModel: resolvedModelOf(output.stdout),
 		};
 
 		if (outcome.kind === 'failed') {
@@ -216,18 +223,20 @@ export const createClaudeClient = ({
 	};
 
 	return {
-		runReview: ({ pullRequestUrl, clonePath, onProgress, signal }) => {
+		runReview: ({ pullRequestUrl, clonePath, model, onProgress, signal }) => {
 			const args = buildClaudeArgs({
 				kind: 'review',
 				prompt: buildReviewPrompt(pullRequestUrl),
 				systemPrompt: REVIEW_SYSTEM_PROMPT,
 				jsonSchema: REVIEW_RESULT_JSON_SCHEMA,
+				model,
 			});
 			const progress = { current: createReviewProgress(Date.now(), 'Starting the review') };
 			onProgress?.(progress.current);
 
 			return runClaude({
 				kind: 'review',
+				model,
 				args,
 				clonePath,
 				signal,
@@ -248,16 +257,18 @@ export const createClaudeClient = ({
 				},
 			});
 		},
-		runRepair: ({ sessionId, clonePath, attempt, signal }) => {
+		runRepair: ({ sessionId, clonePath, model, attempt, signal }) => {
 			logger.info('claude_repair_run', { sessionId, attempt });
 
 			return runClaude({
 				kind: 'repair',
+				model,
 				args: buildClaudeArgs({
 					kind: 'review',
 					prompt: REPAIR_PROMPT,
 					systemPrompt: REVIEW_SYSTEM_PROMPT,
 					jsonSchema: REVIEW_RESULT_JSON_SCHEMA,
+					model,
 					resumeSessionId: sessionId,
 				}),
 				clonePath,
@@ -271,16 +282,18 @@ export const createClaudeClient = ({
 					}),
 			});
 		},
-		runReply: ({ prompt, clonePath }) => {
+		runReply: ({ prompt, clonePath, model }) => {
 			const args = buildClaudeArgs({
 				kind: 'reply',
 				prompt,
 				systemPrompt: REPLY_SYSTEM_PROMPT,
 				jsonSchema: REPLY_RESULT_JSON_SCHEMA,
+				model,
 			});
 
 			return runClaude({
 				kind: 'reply',
+				model,
 				args,
 				clonePath,
 				parse: (output) =>

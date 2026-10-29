@@ -11,6 +11,7 @@ interface BuildClaudeArgsParams {
 	prompt: string;
 	systemPrompt: string;
 	jsonSchema: object;
+	model: string | null;
 	resumeSessionId?: string;
 }
 
@@ -19,6 +20,7 @@ export const buildClaudeArgs = ({
 	prompt,
 	systemPrompt,
 	jsonSchema,
+	model,
 	resumeSessionId,
 }: BuildClaudeArgsParams): string[] => {
 	const isRepair = resumeSessionId !== undefined;
@@ -27,11 +29,13 @@ export const buildClaudeArgs = ({
 	const disallowedTools = isRepair ? [...DISALLOWED_TOOLS, ...REVIEW_ONLY_TOOLS] : DISALLOWED_TOOLS;
 	const sessionArgs = kind === 'review' ? [] : ['--no-session-persistence'];
 	const resumeArgs = resumeSessionId === undefined ? [] : ['--resume', resumeSessionId];
+	const modelArgs = model === null ? [] : ['--model', model];
 
 	return [
 		'-p',
 		prompt,
 		...resumeArgs,
+		...modelArgs,
 		'--output-format',
 		'stream-json',
 		'--verbose',

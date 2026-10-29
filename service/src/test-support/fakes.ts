@@ -169,6 +169,7 @@ export interface FakeClaude extends ClaudeClient {
 	replyOutcomes: ClaudeRunOutcome<ReplyResult>[];
 	reviewCalls: string[];
 	replyPrompts: string[];
+	modelCalls: { kind: 'review' | 'repair' | 'reply'; model: string | null }[];
 	reviewGate: Promise<void> | null;
 	reviewError: Error | null;
 	reviewSyncError: Error | null;
@@ -193,10 +194,12 @@ export const createFakeClaude = (): FakeClaude => {
 
 	const runFakeReview: ClaudeClient['runReview'] = async ({
 		pullRequestUrl,
+		model,
 		onProgress,
 		signal,
 	}) => {
 		fake.reviewCalls.push(pullRequestUrl);
+		fake.modelCalls.push({ kind: 'review', model });
 
 		if (fake.reviewError !== null) {
 			throw fake.reviewError;
@@ -246,6 +249,7 @@ export const createFakeClaude = (): FakeClaude => {
 		replyOutcomes: [],
 		reviewCalls: [],
 		replyPrompts: [],
+		modelCalls: [],
 		reviewGate: null,
 		reviewError: null,
 		reviewSyncError: null,
@@ -254,8 +258,9 @@ export const createFakeClaude = (): FakeClaude => {
 		reviewProgressLines: [],
 		replyGate: null,
 		replyError: null,
-		runRepair: async ({ sessionId, clonePath, attempt, signal }) => {
+		runRepair: async ({ sessionId, clonePath, model, attempt, signal }) => {
 			fake.repairCalls.push({ sessionId, clonePath, attempt });
+			fake.modelCalls.push({ kind: 'repair', model });
 
 			const aborted = Promise.withResolvers<'aborted'>();
 
@@ -281,8 +286,9 @@ export const createFakeClaude = (): FakeClaude => {
 
 			return runFakeReview(params);
 		},
-		runReply: async ({ prompt }) => {
+		runReply: async ({ prompt, model }) => {
 			fake.replyPrompts.push(prompt);
+			fake.modelCalls.push({ kind: 'reply', model });
 			replyEntered.resolve();
 
 			if (fake.replyGate !== null) {

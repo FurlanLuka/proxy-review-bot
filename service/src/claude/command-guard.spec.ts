@@ -115,6 +115,7 @@ describe('buildClaudeArgs', () => {
 		prompt: '/proxy:pr-review https://github.com/a/b/pull/1',
 		systemPrompt: 'contract',
 		jsonSchema: { type: 'object' },
+		model: null,
 	});
 
 	const valueAfter = (args: string[], flag: string): string | undefined => {
@@ -136,12 +137,14 @@ describe('buildClaudeArgs', () => {
 			prompt: 'answer',
 			systemPrompt: 'contract',
 			jsonSchema: { type: 'object' },
+			model: null,
 		});
 		const repairArgs = buildClaudeArgs({
 			kind: 'review',
 			prompt: 'return the result',
 			systemPrompt: 'contract',
 			jsonSchema: { type: 'object' },
+			model: null,
 			resumeSessionId: 'session-1',
 		});
 
@@ -185,12 +188,36 @@ describe('buildClaudeArgs', () => {
 		expect(disallowed).toContain('Write');
 	});
 
+	it('no model → no --model flag, so Claude Code’s default applies', () => {
+		expect(reviewArgs).not.toContain('--model');
+	});
+
+	it('a chosen model → --model on reviews, replies and repairs, alongside --resume', () => {
+		const withModel = (overrides: { kind: 'review' | 'reply'; resumeSessionId?: string }) => {
+			return buildClaudeArgs({
+				prompt: 'p',
+				systemPrompt: 'contract',
+				jsonSchema: {},
+				model: 'opus[1m]',
+				...overrides,
+			});
+		};
+
+		const repairArgs = withModel({ kind: 'review', resumeSessionId: 'session-1' });
+
+		expect(valueAfter(withModel({ kind: 'review' }), '--model')).toBe('opus[1m]');
+		expect(valueAfter(withModel({ kind: 'reply' }), '--model')).toBe('opus[1m]');
+		expect(valueAfter(repairArgs, '--model')).toBe('opus[1m]');
+		expect(valueAfter(repairArgs, '--resume')).toBe('session-1');
+	});
+
 	it('reply tools are read-only, without subagents or skills', () => {
 		const replyArgs = buildClaudeArgs({
 			kind: 'reply',
 			prompt: 'thread',
 			systemPrompt: 'contract',
 			jsonSchema: {},
+			model: null,
 		});
 		const allowed = valueAfter(replyArgs, '--allowedTools') ?? '';
 

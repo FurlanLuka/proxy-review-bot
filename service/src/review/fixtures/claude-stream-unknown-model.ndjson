@@ -1,0 +1,2 @@
+{"type": "system", "subtype": "init", "session_id": "fae7d927-d0a4-482e-89a2-079e3377652b", "model": "prb-bogus-model", "cwd": "/clone"}
+{"type": "result", "subtype": "success", "is_error": true, "api_error_status": 404, "duration_ms": 764, "num_turns": 1, "result": "There's an issue with the selected model (prb-bogus-model). It may not exist or you may not have access to it.", "stop_reason": "stop_sequence", "session_id": "fae7d927-d0a4-482e-89a2-079e3377652b", "terminal_reason": "api_error", "total_cost_usd": 0}

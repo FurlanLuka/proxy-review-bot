@@ -10,6 +10,7 @@ public struct BotSettings: Codable, Equatable, Sendable {
     public var skip: [String]
     public var toolPaths: ToolPaths
     public var manualStartBranches: [BranchPair]?
+    public var claudeModel: String?
 }
 
 public enum ReviewMode: String, Codable, CaseIterable, Sendable {

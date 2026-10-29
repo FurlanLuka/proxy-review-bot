@@ -234,6 +234,34 @@ const findSessionId = (stdout: string): string | undefined => {
 	return undefined;
 };
 
+const INIT_LINE_SCHEMA = z.object({
+	type: z.literal('system'),
+	subtype: z.literal('init'),
+	model: z.string(),
+});
+
+const initModelOf = (line: string): string | null => {
+	try {
+		const parsed = INIT_LINE_SCHEMA.safeParse(JSON.parse(line));
+
+		return parsed.success ? parsed.data.model : null;
+	} catch {
+		return null;
+	}
+};
+
+export const resolvedModelOf = (stdout: string): string | null => {
+	for (const line of stdout.split('\n')) {
+		const model = initModelOf(line);
+
+		if (model !== null) {
+			return model;
+		}
+	}
+
+	return null;
+};
+
 const parseJson = (text: string): unknown => {
 	try {
 		return JSON.parse(text);
@@ -387,7 +415,14 @@ export const parseClaudeOutput = <Result>({
 	const { envelope, line } = parsedEnvelope;
 
 	if (envelope.is_error || envelope.subtype !== 'success') {
-		return { kind: 'failed', summary: `Claude run ended with ${envelope.subtype}` };
+		const errorMessage = envelope.is_error ? envelope.result?.trim() : undefined;
+
+		return {
+			kind: 'failed',
+			summary: errorMessage
+				? `Claude run failed: ${errorMessage.slice(0, 200)}`
+				: `Claude run ended with ${envelope.subtype}`,
+		};
 	}
 
 	const structuredOutput = readStructuredOutput(envelope, allowTextFallback);

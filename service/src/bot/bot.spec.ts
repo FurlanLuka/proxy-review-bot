@@ -3582,3 +3582,88 @@ describe('Start manually branches', () => {
 		expect(setup.statusOf(7)?.isManualStart).toBe(false);
 	});
 });
+
+describe('the Claude model setting', () => {
+	const missingResult = {
+		kind: 'failed' as const,
+		summary: "Claude's result had the wrong shape (result: Required)",
+		schemaIssues: ['result: Required'],
+		repairSessionId: 'session-1',
+	};
+
+	it('no model set → every run uses Claude Code’s default', async () => {
+		const setup = setUp({ reviewMode: 'auto' });
+
+		setup.github.addPullRequest(7);
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.tickAndSettle();
+
+		expect(setup.claude.modelCalls).toEqual([{ kind: 'review', model: null }]);
+	});
+
+	it('the chosen model reaches the review, its repair and a reply', async () => {
+		const setup = setUp({ reviewMode: 'auto', claudeModel: 'sonnet' });
+		const entry = setup.github.addPullRequest(7);
+
+		setup.claude.reviewOutcomes.push(missingResult);
+		setup.claude.repairOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.tickAndSettle();
+
+		entry.threads = [
+			makeThread([
+				makeComment({
+					databaseId: 1,
+					authorLogin: VIEWER_LOGIN,
+					body: `Finding\n${createBotMarker('head-1')}`,
+				}),
+				makeComment({ databaseId: 2, authorLogin: 'ana', body: 'Why is this wrong?' }),
+			]),
+		];
+		setup.claude.replyOutcomes.push({ kind: 'result', result: { reply: 'Because X.' } });
+		await setup.tickAndSettle();
+		await setup.tickAndSettle();
+
+		expect(setup.claude.modelCalls).toEqual([
+			{ kind: 'review', model: 'sonnet' },
+			{ kind: 'repair', model: 'sonnet' },
+			{ kind: 'reply', model: 'sonnet' },
+		]);
+	});
+
+	it('changing the model mid-review → that job’s repair keeps the model it started with', async () => {
+		const setup = setUp({ reviewMode: 'auto', claudeModel: 'opus' });
+		const gate = Promise.withResolvers<void>();
+
+		setup.github.addPullRequest(7);
+		setup.claude.reviewGate = gate.promise;
+		setup.claude.reviewOutcomes.push(missingResult);
+		setup.claude.repairOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.bot.tick();
+		await setup.claude.waitForReviewCall(1);
+
+		setup.dependencies.settingsStore.replace({
+			...setup.dependencies.settingsStore.get(),
+			claudeModel: 'haiku',
+		});
+		gate.resolve();
+		await setup.settle();
+
+		expect(setup.claude.modelCalls).toEqual([
+			{ kind: 'review', model: 'opus' },
+			{ kind: 'repair', model: 'opus' },
+		]);
+	});
+
+	it('a plain Claude failure → its message becomes the PR’s reason, no repair', async () => {
+		const setup = setUp({ reviewMode: 'auto', claudeModel: 'prb-bogus-model' });
+		const message =
+			"Claude run failed: There's an issue with the selected model (prb-bogus-model). It may not exist or you may not have access to it.";
+
+		setup.github.addPullRequest(7);
+		setup.claude.reviewOutcomes.push({ kind: 'failed', summary: message });
+		await setup.tickAndSettle();
+
+		expect(setup.claude.repairCalls).toEqual([]);
+		expect(setup.statusOf(7)?.reason).toBe(message);
+	});
+});

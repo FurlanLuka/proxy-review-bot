@@ -62,6 +62,8 @@ requested) and **Post reviews** decides what happens when it's done (a draft for
 automatically). When reviews post automatically, **Auto-approve** decides whether approvals post on
 their own too (never, always, or only for small PRs); otherwise they still wait for your click. You
 can also limit which orgs and repos it watches, and set the round limit and how often it checks.
+**Claude model** picks the model reviews and replies run on (Claude Code's default, Fable, Opus,
+Sonnet or Haiku); proxy's advisors keep their own model.
 
 Release PRs never start on their own. **Start manually** in Settings lists the head → base branches
 the bot leaves for you, `develop → master` and `develop → main` by default. Those PRs wait until you

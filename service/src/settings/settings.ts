@@ -10,6 +10,14 @@ const BRANCH_PAIR_SCHEMA = z
 	.object({ head: BRANCH_NAME_SCHEMA, base: BRANCH_NAME_SCHEMA })
 	.strict();
 
+const CLAUDE_MODEL_SCHEMA = z
+	.string()
+	.trim()
+	.max(100)
+	.regex(/^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/)
+	.nullable()
+	.default(null);
+
 const DEFAULT_MANUAL_START_BRANCHES = [
 	{ head: 'develop', base: 'master' },
 	{ head: 'develop', base: 'main' },
@@ -27,6 +35,7 @@ export const SETTINGS_SCHEMA = z
 		watch: z.array(z.string().min(1)).default([]),
 		skip: z.array(z.string().min(1)).default([]),
 		manualStartBranches: z.array(BRANCH_PAIR_SCHEMA).default(DEFAULT_MANUAL_START_BRANCHES),
+		claudeModel: CLAUDE_MODEL_SCHEMA,
 		toolPaths: z
 			.object({ claude: TOOL_PATH_SCHEMA, gh: TOOL_PATH_SCHEMA, git: TOOL_PATH_SCHEMA })
 			.default({}),

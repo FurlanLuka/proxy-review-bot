@@ -252,7 +252,8 @@ Posts what you send, which can differ from the stored draft:
 	"manualStartBranches": [
 		{ "head": "develop", "base": "master" },
 		{ "head": "develop", "base": "main" }
-	]
+	],
+	"claudeModel": null
 }
 ```
 
@@ -260,5 +261,6 @@ Posts what you send, which can differ from the stored draft:
 - `postReviews`: how finished reviews are posted (Post reviews in the app). `ask`: each review is held as a draft for you. `auto`: comment reviews post on their own, and an approving review follows `autoApprove`. It's independent of `reviewMode`. A body, or an older settings file, without it gets it derived from `reviewMode` (`auto` → `auto`, `manual` → `ask`). Changing it only affects reviews that finish afterwards; drafts already held stay until you act.
 - `manualStartBranches`: head → base pairs (Start manually in the app) whose PRs never start a round on their own, in either start mode and even after you've started them: new commits, a re-request or a failed run's backoff move a started PR to `needs_review` once instead of queueing it, and the round limit doesn't apply. Review, Retry and POST /prs each run one round. Names match exactly (case-sensitive), fork heads included. Defaults to develop → master and develop → main, also for an older settings file without it; an empty list turns it off.
 - `autoApprove`: `off`, `on` or `small`. It only applies when `postReviews` is `auto`; with `off`, an approving review waits for your click.
+- `claudeModel`: the model passed to `claude --model` for reviews, their repair resumes and replies (Claude model in the app), or null for Claude Code's own default. An alias (`opus`, `sonnet`, `haiku`, `fable`) or a full model id; it must start with a letter or digit, up to 100 characters of letters, digits and `._:[]-`. Each job reads it once when it starts, so a change applies to the next run. Proxy's advisor agents pin their own model and aren't affected. A model Claude doesn't know fails the run, and the PR's `reason` is Claude's message. Defaults to null, also for an older settings file without it.
 - `toolPaths`: each value is a string or null. null means look it up on PATH.
-- PUT takes the full object (`postReviews` and `manualStartBranches` may be left out, see above) and returns the saved settings. An invalid body gets 400 `{ "error": "invalid_settings" }` and leaves the saved settings unchanged.
+- PUT takes the full object (`postReviews`, `manualStartBranches` and `claudeModel` may be left out, see above) and returns the saved settings. An invalid body gets 400 `{ "error": "invalid_settings" }` and leaves the saved settings unchanged.

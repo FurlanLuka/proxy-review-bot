@@ -192,6 +192,7 @@ interface BuildRepairContextParams {
 	job: RunReviewJobParams;
 	clonePath: string;
 	headSha: string;
+	model: string | null;
 	jobLogger: Logger;
 }
 
@@ -199,6 +200,7 @@ const buildRepairContext = ({
 	job,
 	clonePath,
 	headSha,
+	model,
 	jobLogger,
 }: BuildRepairContextParams): RepairContext => {
 	const { claude, sleep, now } = job.dependencies;
@@ -210,6 +212,7 @@ const buildRepairContext = ({
 		logger: jobLogger,
 		pullRequestUrl: job.tracked.url,
 		clonePath,
+		model,
 		signal: job.signal,
 		onProgress: job.onProgress,
 		isReleased: () => job.signal?.aborted === true || findRelease(job, false) !== null,
@@ -220,8 +223,9 @@ const buildRepairContext = ({
 
 export const runReviewJob = async (params: RunReviewJobParams): Promise<JobOutcome> => {
 	const { dependencies, tracked } = params;
-	const { store, github, clones, logger, now } = dependencies;
+	const { store, github, clones, logger, now, settingsStore } = dependencies;
 	const jobLogger = logger.child({ jobPullRequestId: tracked.id, jobStartedAt: now() });
+	const model = settingsStore.get().claudeModel;
 
 	store.updatePullRequest(tracked.id, {
 		status: 'reviewing',
@@ -259,7 +263,13 @@ export const runReviewJob = async (params: RunReviewJobParams): Promise<JobOutco
 			}
 
 			return reviewWithRepair({
-				context: buildRepairContext({ job: params, clonePath, headSha: live.headSha, jobLogger }),
+				context: buildRepairContext({
+					job: params,
+					clonePath,
+					headSha: live.headSha,
+					model,
+					jobLogger,
+				}),
 				savedSessionId,
 			});
 		});

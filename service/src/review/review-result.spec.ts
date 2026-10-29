@@ -7,9 +7,15 @@ import {
 	extractTrailingJsonObject,
 	parseClaudeOutput,
 	REPLY_RESULT_SCHEMA,
+	resolvedModelOf,
 	REVIEW_RESULT_JSON_SCHEMA,
 	REVIEW_RESULT_SCHEMA,
 } from './review-result.js';
+
+const UNKNOWN_MODEL_STREAM = readFileSync(
+	new URL('./fixtures/claude-stream-unknown-model.ndjson', import.meta.url),
+	'utf8',
+);
 
 const output = (stdout: string, overrides = {}) => ({
 	exitCode: 0,
@@ -53,6 +59,38 @@ describe('parseClaudeOutput', () => {
 
 	it('is_error → failed', () => {
 		expect(parseReview(envelopeWith(undefined, { is_error: true })).kind).toBe('failed');
+	});
+
+	it('an unknown model → failed with Claude’s message, nothing to repair', () => {
+		expect(parseReview(UNKNOWN_MODEL_STREAM, { exitCode: 1 })).toEqual({
+			kind: 'failed',
+			summary:
+				"Claude run failed: There's an issue with the selected model (prb-bogus-model). It may not exist or you may not have access to it.",
+		});
+	});
+
+	it('is_error with an empty or missing result → falls back to the subtype', () => {
+		const { result: _omitted, ...withoutResult } = envelopeFixture;
+		const expected = { kind: 'failed' as const, summary: 'Claude run ended with success' };
+
+		expect(parseReview(envelopeWith(undefined, { is_error: true, result: '  ' }))).toEqual(
+			expected,
+		);
+		expect(parseReview(JSON.stringify({ ...withoutResult, is_error: true }))).toEqual(expected);
+	});
+
+	it('is_error with a long message → cut to 200 characters', () => {
+		expect(
+			parseReview(envelopeWith(undefined, { is_error: true, result: 'x'.repeat(300) })),
+		).toEqual({
+			kind: 'failed',
+			summary: `Claude run failed: ${'x'.repeat(200)}`,
+		});
+	});
+
+	it('the init line names the resolved model; no init line → none', () => {
+		expect(resolvedModelOf(UNKNOWN_MODEL_STREAM)).toBe('prb-bogus-model');
+		expect(resolvedModelOf('{"type":"result"}\nnot json')).toBeNull();
 	});
 
 	it('error_max_turns → failed with subtype', () => {
