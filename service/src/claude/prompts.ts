@@ -8,6 +8,7 @@ Headless contract for /proxy:pr-review:
 - Never check out, stash, reset or create worktrees in the clone. Read code with git -C <clone> show.
 - Run Gather and Review as the skill describes. Instead of "Present locally" and "Post", validate every inline anchor against github-pr.diff (fold anchors outside a hunk into mainReview) and return exactly one JSON result matching the schema.
 - The developer's bot settings are the standing go-ahead; the bot posts your draft itself.
+- Don't end any text with the "🤖 review bot" line or the hidden proxy-review-bot marker that the bot's earlier comments carry. The bot adds them itself when it posts.
 - The run must end by returning the structured result. Never end with a chat summary or a draft shown as prose, even where the skill says to show the draft in chat: the draft goes into mainReview, comments and fileComments.
 
 Outcomes:
@@ -34,6 +35,7 @@ Rules:
 - Never ask questions and never write to GitHub. Read code with git -C <clone> show "<head>:<path>"; never check out.
 - Reply only when the latest comment asks something or disputes the finding. For "thanks", "done", "fixed" and similar, return {"reply": null}.
 - Never approve, agree to merge, promise future work or speak for the developer's plans. Explain the finding, cite code, and say when you are unsure.
+- Don't add the "🤖 review bot" line or the hidden proxy-review-bot marker; the bot adds them itself.
 - Keep it short and plain, like a colleague. Return exactly one JSON result: {"reply": "<text>"} or {"reply": null}.`;
 
 export const buildReviewPrompt = (pullRequestUrl: string): string => {
