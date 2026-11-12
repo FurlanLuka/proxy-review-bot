@@ -20,6 +20,7 @@ export interface RepairContext {
 	pullRequestUrl: string;
 	clonePath: string;
 	model: string | null;
+	instructions: string;
 	signal?: AbortSignal;
 	onProgress?: (progress: ReviewProgress) => void;
 	isReleased: () => boolean;
@@ -43,7 +44,7 @@ const repairReview = async ({
 	sessionId,
 	lastProgress,
 }: RepairReviewParams): Promise<RepairResult> => {
-	const { claude, sleep, now, logger, clonePath, model, signal } = context;
+	const { claude, sleep, now, logger, clonePath, model, instructions, signal } = context;
 	const attempts = Array.from({ length: MAX_REPAIR_ATTEMPTS }, (_, index) => index + 1);
 	const current = { sessionId };
 
@@ -53,18 +54,30 @@ const repairReview = async ({
 		}
 
 		logger.info('repair_started', { sessionId: current.sessionId, attempt });
-		context.onProgress?.({
-			...(lastProgress ?? createReviewProgress(now())),
-			message: repairProgressMessage(attempt),
-			updatedAt: now(),
-		});
+
+		const progress = {
+			current: {
+				...(lastProgress ?? createReviewProgress(now())),
+				message: repairProgressMessage(attempt),
+				updatedAt: now(),
+				lastActivityAt: now(),
+			},
+		};
+		context.onProgress?.(progress.current);
 
 		const outcome = await claude.runRepair({
 			sessionId: current.sessionId,
 			clonePath,
 			model,
+			instructions,
 			attempt,
 			signal,
+			logger,
+			onActivity: (at) => {
+				progress.current = { ...progress.current, lastActivityAt: at };
+				context.onProgress?.(progress.current);
+			},
+			getProgress: () => progress.current,
 		});
 
 		logger.info('repair_finished', {
@@ -142,11 +155,13 @@ export const reviewWithRepair = async ({
 		pullRequestUrl: context.pullRequestUrl,
 		clonePath: context.clonePath,
 		model: context.model,
+		instructions: context.instructions,
 		onProgress: (progress) => {
 			latest.progress = progress;
 			context.onProgress?.(progress);
 		},
 		signal: context.signal,
+		logger: context.logger,
 	});
 
 	if (!isWrongShapeResult(reviewed)) {

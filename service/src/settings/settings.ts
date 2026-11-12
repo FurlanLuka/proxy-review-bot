@@ -30,6 +30,8 @@ export const SETTINGS_SCHEMA = z
 		autoApprove: z.enum(['off', 'on', 'small']).default('off'),
 		smallPullRequestLineLimit: z.number().int().min(1).max(100_000).default(200),
 		maxRounds: z.number().int().min(1).max(20).default(5),
+		maxParallelReviews: z.number().int().min(1).max(10).default(3),
+		reviewInstructions: z.string().trim().max(4000).default(''),
 		pollIntervalSeconds: z.number().int().min(15).max(3600).default(60),
 		answerQuestions: z.boolean().default(true),
 		autoUpdate: z.boolean().default(true),

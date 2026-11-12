@@ -12,7 +12,8 @@ interface CreateApiHandlerParams {
 	logger: Logger;
 }
 
-const PULL_REQUEST_ACTION_PATTERN = /^\/prs\/(\d+)\/(review|approve|stop|retry|post|discard)$/;
+const PULL_REQUEST_ACTION_PATTERN =
+	/^\/prs\/(\d+)\/(review|approve|stop|retry|restart|post|discard)$/;
 const DRAFT_PATTERN = /^\/prs\/(\d+)\/draft$/;
 
 const json = (body: unknown, status = 200): Response => {
@@ -98,6 +99,10 @@ export const createApiHandler = ({
 			const candidate = await request.json().catch(() => null);
 			const saved = settingsStore.replace(candidate);
 
+			if (saved !== null) {
+				bot.applySettings();
+			}
+
 			return saved === null ? json({ error: 'invalid_settings' }, 400) : json(saved);
 		}
 
@@ -144,6 +149,7 @@ export const createApiHandler = ({
 			review: async () => bot.requestReview(id),
 			stop: async () => bot.stop(id),
 			retry: async () => bot.retry(id),
+			restart: async () => bot.restart(id),
 			approve: () => bot.approve(id),
 			post: async () => bot.postDraft(id, await request.json().catch(() => null)),
 			discard: async () => bot.discardDraft(id),

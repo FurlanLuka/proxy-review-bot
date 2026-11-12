@@ -122,6 +122,64 @@ describe('api', () => {
 		expect(bot.getState().pullRequests[0]?.status).toBe('stopped');
 	});
 
+	it('restart: reviewing → 200; not reviewing → 409 not_reviewing; unknown → 404', async () => {
+		const { call, github, bot, claude } = setUp();
+
+		expect((await call('POST', '/prs/999/restart')).status).toBe(404);
+
+		github.addPullRequest(7);
+		await bot.tick();
+
+		const id = bot.getState().pullRequests[0]?.id;
+		const refused = await call('POST', `/prs/${id}/restart`);
+
+		expect(refused.status).toBe(409);
+		expect(await refused.json()).toEqual({ error: 'not_reviewing' });
+
+		const gate = Promise.withResolvers<void>();
+
+		claude.reviewGate = gate.promise;
+		expect((await call('POST', `/prs/${id}/review`)).status).toBe(200);
+		await claude.waitForReviewCall(1);
+
+		const restarted = await call('POST', `/prs/${id}/restart`);
+
+		expect(restarted.status).toBe(200);
+		expect(await restarted.json()).toEqual({ ok: true });
+
+		gate.resolve();
+		await bot.waitForIdle();
+	});
+
+	it('PUT /settings with a higher review limit → queued reviews start right away', async () => {
+		const { call, bot, claude, github, dependencies } = setUp();
+		const gate = Promise.withResolvers<void>();
+
+		dependencies.settingsStore.replace({
+			...DEFAULT_SETTINGS,
+			reviewMode: 'auto',
+			maxParallelReviews: 1,
+		});
+		claude.reviewGate = gate.promise;
+		github.addPullRequest(7);
+		github.addPullRequest(8);
+		await bot.tick();
+		await claude.waitForReviewCall(1);
+
+		const response = await call('PUT', '/settings', {
+			...dependencies.settingsStore.get(),
+			maxParallelReviews: 2,
+		});
+
+		expect(response.status).toBe(200);
+
+		await claude.waitForReviewCall(2);
+		expect(claude.reviewCalls).toHaveLength(2);
+
+		gate.resolve();
+		await bot.waitForIdle();
+	});
+
 	it('pause and resume', async () => {
 		const { call, bot } = setUp();
 

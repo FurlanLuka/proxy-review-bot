@@ -65,6 +65,10 @@ final class BotModel: ObservableObject {
         perform(.retry(pullRequestID: pullRequest.id), on: pullRequest)
     }
 
+    func restart(_ pullRequest: PullRequest) {
+        perform(.restart(pullRequestID: pullRequest.id), on: pullRequest)
+    }
+
     func togglePause() {
         guard let state else {
             return

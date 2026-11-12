@@ -61,4 +61,19 @@ final class ReviewProgressTests: XCTestCase {
 
         XCTAssertNil(pullRequest.progress)
     }
+
+    func testProgressDecodesWithAndWithoutLastActivity() throws {
+        let withActivity = """
+        {"phase": null, "message": "m", "subagents": [], "updatedAt": 1, "lastActivityAt": 2}
+        """
+        let olderService = """
+        {"phase": null, "message": "m", "subagents": [], "updatedAt": 1}
+        """
+
+        XCTAssertEqual(
+            try JSONDecoder().decode(ReviewProgress.self, from: Data(withActivity.utf8)).lastActivityAt,
+            2
+        )
+        XCTAssertNil(try JSONDecoder().decode(ReviewProgress.self, from: Data(olderService.utf8)).lastActivityAt)
+    }
 }

@@ -5,6 +5,7 @@ public enum ServiceAction: Equatable, Sendable {
     case approve(pullRequestID: Int)
     case stop(pullRequestID: Int)
     case retry(pullRequestID: Int)
+    case restart(pullRequestID: Int)
     case fetchDraft(pullRequestID: Int)
     case fetchHistory
     case postDraft(pullRequestID: Int, request: ReviewPostRequest)
@@ -35,6 +36,8 @@ public enum ServiceAction: Equatable, Sendable {
             return "/prs/\(pullRequestID)/stop"
         case .retry(let pullRequestID):
             return "/prs/\(pullRequestID)/retry"
+        case .restart(let pullRequestID):
+            return "/prs/\(pullRequestID)/restart"
         case .fetchDraft(let pullRequestID):
             return "/prs/\(pullRequestID)/draft"
         case .fetchHistory:

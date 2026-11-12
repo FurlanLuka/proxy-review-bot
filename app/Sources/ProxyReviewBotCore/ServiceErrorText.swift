@@ -27,6 +27,8 @@ public enum ServiceErrorText {
             return "You're already on the latest version"
         case (_, "cannot_install"):
             return "Updates work only in the installed app"
+        case (_, "not_reviewing"):
+            return "\(subject) isn't being reviewed anymore"
         case (_, "own_pr"):
             return "You can only comment on your own PR"
         case (404, _):

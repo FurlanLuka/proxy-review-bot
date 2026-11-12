@@ -46,7 +46,12 @@ const findRelease = (
 	return isAboutToPost && isPaused() ? 'requeue' : null;
 };
 
-const releaseJob = (params: RunReviewJobParams, release: JobRelease): void => {
+interface JobAttempt {
+	/** The job has added its attempt to `attemptsForHead`, so a release must give it back */
+	isCounted: boolean;
+}
+
+const releaseJob = (params: RunReviewJobParams, release: JobRelease, attempt: JobAttempt): void => {
 	const { store, logger, now } = params.dependencies;
 	const current = store.getPullRequest(params.tracked.id);
 
@@ -56,11 +61,16 @@ const releaseJob = (params: RunReviewJobParams, release: JobRelease): void => {
 
 	store.updatePullRequest(current.id, {
 		reviewStartedAt: null,
-		attemptsForHead: Math.max(0, current.attemptsForHead - 1),
+		...(attempt.isCounted && { attemptsForHead: Math.max(0, current.attemptsForHead - 1) }),
 		...(release === 'requeue' && { status: 'queued', updatedAt: now() }),
 	});
 	logger.warn('review_result_not_posted', { id: current.id, release, status: current.status });
 };
+
+interface FinalUpdate {
+	update: PullRequestUpdate;
+	isPosted: boolean;
+}
 
 interface ApplyResultParams {
 	job: RunReviewJobParams;
@@ -80,7 +90,7 @@ const applyResult = async ({
 	jobHeadSha,
 	jobBaseRefName,
 	isRecovered,
-}: ApplyResultParams): Promise<PullRequestUpdate | JobRelease> => {
+}: ApplyResultParams): Promise<FinalUpdate | JobRelease> => {
 	const { store, github, settingsStore, logger, now } = job.dependencies;
 	const tracked = store.getPullRequest(job.tracked.id) ?? job.tracked;
 	const live = await github.getPullRequest(tracked);
@@ -102,14 +112,18 @@ const applyResult = async ({
 		isRecovered,
 	});
 
-	if (action.kind !== 'post') {
-		return buildPostingUpdate({ action, tracked, jobHeadSha, now: now() });
-	}
-
-	const release = findRelease(job, true);
+	// A restart or Stop during the fetch above wins over any result; only a post defers to a pause
+	const release = findRelease(job, action.kind === 'post');
 
 	if (release !== null) {
 		return release;
+	}
+
+	if (action.kind !== 'post') {
+		return {
+			update: buildPostingUpdate({ action, tracked, jobHeadSha, now: now() }),
+			isPosted: false,
+		};
 	}
 
 	try {
@@ -132,27 +146,42 @@ const applyResult = async ({
 		logger.error('review_post_failed', { id: tracked.id, error });
 
 		return {
-			status: 'needs_you',
-			reviewStartedAt: null,
-			lastError: `Posting the review failed: ${describeError(error)}`,
-			updatedAt: now(),
+			update: {
+				status: 'needs_you',
+				reviewStartedAt: null,
+				lastError: `Posting the review failed: ${describeError(error)}`,
+				updatedAt: now(),
+			},
+			isPosted: false,
 		};
 	}
 
-	return buildPostingUpdate({
-		action: { kind: 'posted', event: action.event, summary: action.draft.summary },
-		tracked,
-		jobHeadSha,
-		now: now(),
-	});
+	return {
+		update: buildPostingUpdate({
+			action: { kind: 'posted', event: action.event, summary: action.draft.summary },
+			tracked,
+			jobHeadSha,
+			now: now(),
+		}),
+		isPosted: true,
+	};
 };
 
-const writeFinalUpdate = (params: RunReviewJobParams, update: PullRequestUpdate): void => {
-	const { store } = params.dependencies;
-	const isStillReviewing = store.getPullRequest(params.tracked.id)?.status === 'reviewing';
+const writeFinalUpdate = (params: RunReviewJobParams, { update, isPosted }: FinalUpdate): void => {
+	const { store, logger } = params.dependencies;
+	const status = store.getPullRequest(params.tracked.id)?.status;
+	// A restart or Review click that lands while posting must not queue a second review of the same commit
+	const isRequeuedAfterPost = isPosted && status === 'queued';
 	const { status: _keptStatus, ...updateWithoutStatus } = update;
 
-	store.updatePullRequest(params.tracked.id, isStillReviewing ? update : updateWithoutStatus);
+	if (isRequeuedAfterPost) {
+		logger.info('restart_superseded_by_post', { id: params.tracked.id, status: update.status });
+	}
+
+	store.updatePullRequest(
+		params.tracked.id,
+		status === 'reviewing' || isRequeuedAfterPost ? update : updateWithoutStatus,
+	);
 	store.recordActivity(params.tracked.id, 'review_finished', { status: update.status });
 };
 
@@ -193,6 +222,7 @@ interface BuildRepairContextParams {
 	clonePath: string;
 	headSha: string;
 	model: string | null;
+	instructions: string;
 	jobLogger: Logger;
 }
 
@@ -201,6 +231,7 @@ const buildRepairContext = ({
 	clonePath,
 	headSha,
 	model,
+	instructions,
 	jobLogger,
 }: BuildRepairContextParams): RepairContext => {
 	const { claude, sleep, now } = job.dependencies;
@@ -213,6 +244,7 @@ const buildRepairContext = ({
 		pullRequestUrl: job.tracked.url,
 		clonePath,
 		model,
+		instructions,
 		signal: job.signal,
 		onProgress: job.onProgress,
 		isReleased: () => job.signal?.aborted === true || findRelease(job, false) !== null,
@@ -225,7 +257,8 @@ export const runReviewJob = async (params: RunReviewJobParams): Promise<JobOutco
 	const { dependencies, tracked } = params;
 	const { store, github, clones, logger, now, settingsStore } = dependencies;
 	const jobLogger = logger.child({ jobPullRequestId: tracked.id, jobStartedAt: now() });
-	const model = settingsStore.get().claudeModel;
+	const { claudeModel: model, reviewInstructions: instructions } = settingsStore.get();
+	const attempt: JobAttempt = { isCounted: false };
 
 	store.updatePullRequest(tracked.id, {
 		status: 'reviewing',
@@ -242,6 +275,7 @@ export const runReviewJob = async (params: RunReviewJobParams): Promise<JobOutco
 			lastAttemptedHead: live.headSha,
 			attemptsForHead: isSameHead ? tracked.attemptsForHead + 1 : 1,
 		});
+		attempt.isCounted = true;
 		jobLogger.info('review_job_started', { url: tracked.url, headSha: live.headSha });
 
 		const savedSessionId = findUsableSavedSession({
@@ -268,6 +302,7 @@ export const runReviewJob = async (params: RunReviewJobParams): Promise<JobOutco
 					clonePath,
 					headSha: live.headSha,
 					model,
+					instructions,
 					jobLogger,
 				}),
 				savedSessionId,
@@ -276,7 +311,7 @@ export const runReviewJob = async (params: RunReviewJobParams): Promise<JobOutco
 		const release = findRelease(params, false);
 
 		if (release !== null || run === null) {
-			releaseJob(params, release ?? 'discard');
+			releaseJob(params, release ?? 'discard', attempt);
 
 			return COMPLETED;
 		}
@@ -284,15 +319,15 @@ export const runReviewJob = async (params: RunReviewJobParams): Promise<JobOutco
 		const { outcome, isRecovered } = run;
 
 		if (outcome.kind === 'usage_limited' || outcome.kind === 'setup_broken') {
-			releaseJob(params, 'requeue');
+			releaseJob(params, 'requeue', attempt);
 			jobLogger.warn('review_job_interrupted', { reason: outcome.kind });
 
 			return outcome;
 		}
 
-		const update =
+		const final =
 			outcome.kind === 'failed'
-				? buildFailureUpdate(outcome.summary, now())
+				? { update: buildFailureUpdate(outcome.summary, now()), isPosted: false }
 				: await applyResult({
 						job: params,
 						result: outcome.result,
@@ -301,28 +336,38 @@ export const runReviewJob = async (params: RunReviewJobParams): Promise<JobOutco
 						isRecovered,
 					});
 
-		if (update === 'discard' || update === 'requeue') {
-			releaseJob(params, update);
+		if (final === 'discard' || final === 'requeue') {
+			releaseJob(params, final, attempt);
 
 			return COMPLETED;
 		}
 
-		writeFinalUpdate(params, update);
+		writeFinalUpdate(params, final);
 
 		if (outcome.kind === 'result') {
 			clearRepairSession(params);
 		}
 
-		const finishedFields = { status: update.status, error: update.lastError };
+		const finishedFields = { status: final.update.status, error: final.update.lastError };
 
-		if (update.lastError) {
+		if (final.update.lastError) {
 			jobLogger.warn('review_job_finished', finishedFields);
 		} else {
 			jobLogger.info('review_job_finished', finishedFields);
 		}
 	} catch (error) {
 		jobLogger.error('review_job_failed', { error });
-		writeFinalUpdate(params, buildFailureUpdate(describeError(error), now()));
+
+		const release = findRelease(params, false);
+
+		if (release !== null) {
+			releaseJob(params, release, attempt);
+		} else {
+			writeFinalUpdate(params, {
+				update: buildFailureUpdate(describeError(error), now()),
+				isPosted: false,
+			});
+		}
 	}
 
 	return COMPLETED;

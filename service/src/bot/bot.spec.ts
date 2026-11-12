@@ -2294,6 +2294,23 @@ describe('repairing a review that returned no structured result', () => {
 		expect(setup.statusOf(7)?.status).toBe('draft_ready');
 	});
 
+	it('repair output refreshes the card activity, so a working repair never reads as stalled', async () => {
+		const { setup, id } = await startManualReview();
+		const gate = createGate();
+
+		setup.claude.reviewOutcomes.push(missingResult('session-1'));
+		setup.claude.repairOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.claude.repairGate = gate.promise;
+		setup.claude.repairActivity = [setup.clock.now + 45_000];
+		setup.bot.requestReview(id);
+		await waitUntil(() => setup.claude.repairCalls.length === 1);
+
+		expect(setup.statusOf(7)?.progress?.lastActivityAt).toBe(setup.clock.now + 45_000);
+
+		gate.open();
+		await setup.settle();
+	});
+
 	it('after giving up on a commit, Review Again still resumes the saved session first', async () => {
 		const { setup, id } = await startManualReview();
 
@@ -3630,6 +3647,36 @@ describe('the Claude model setting', () => {
 		]);
 	});
 
+	it('review instructions reach the review, its repair and a reply', async () => {
+		const instructions = 'Keep comments short. Skip naming nitpicks.';
+		const setup = setUp({ reviewMode: 'auto', reviewInstructions: instructions });
+		const entry = setup.github.addPullRequest(7);
+
+		setup.claude.reviewOutcomes.push(missingResult);
+		setup.claude.repairOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.tickAndSettle();
+
+		entry.threads = [
+			makeThread([
+				makeComment({
+					databaseId: 1,
+					authorLogin: VIEWER_LOGIN,
+					body: `Finding\n${createBotMarker('head-1')}`,
+				}),
+				makeComment({ databaseId: 2, authorLogin: 'ana', body: 'Why is this wrong?' }),
+			]),
+		];
+		setup.claude.replyOutcomes.push({ kind: 'result', result: { reply: 'Because X.' } });
+		await setup.tickAndSettle();
+		await setup.tickAndSettle();
+
+		expect(setup.claude.instructionCalls).toEqual([
+			{ kind: 'review', instructions },
+			{ kind: 'repair', instructions },
+			{ kind: 'reply', instructions },
+		]);
+	});
+
 	it('changing the model mid-review → that job’s repair keeps the model it started with', async () => {
 		const setup = setUp({ reviewMode: 'auto', claudeModel: 'opus' });
 		const gate = Promise.withResolvers<void>();
@@ -3777,5 +3824,302 @@ describe('bot: held for an update, clicks and replies', () => {
 		expect(await setup.bot.approve(id)).toBe('busy');
 		expect(await setup.bot.postDraft(id, null)).toEqual({ result: 'busy' });
 		expect(setup.github.submissions).toEqual([]);
+	});
+});
+
+describe('reviews at once', () => {
+	const queueGated = async (settings: Record<string, unknown>, numbers: number[]) => {
+		const setup = setUp({ reviewMode: 'auto', ...settings });
+		const gate = createGate();
+
+		for (const number of numbers) {
+			setup.github.addPullRequest(number);
+		}
+
+		setup.claude.reviewGate = gate.promise;
+		setup.claude.reviewOutcomes.push(...numbers.map(() => draftedFor('head-1', 'comment')));
+
+		return { ...setup, gate };
+	};
+
+	const reviewingCount = (setup: ReturnType<typeof setUp>, numbers: number[]): number => {
+		return numbers.filter((number) => setup.statusOf(number)?.status === 'reviewing').length;
+	};
+
+	it('limit 1 → one review at a time; the next starts when it finishes', async () => {
+		const setup = await queueGated({ maxParallelReviews: 1 }, [7, 8]);
+
+		await setup.bot.tick();
+		await setup.claude.waitForReviewCall(1);
+		await letPendingJobsRun();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(reviewingCount(setup, [7, 8])).toBe(1);
+
+		setup.gate.open();
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+	});
+
+	it('raising the limit mid-run → queued reviews start right away, not on the next tick', async () => {
+		const setup = await queueGated({ maxParallelReviews: 1 }, [7, 8, 9]);
+
+		await setup.bot.tick();
+		await setup.claude.waitForReviewCall(1);
+		setup.dependencies.settingsStore.replace({
+			...setup.dependencies.settingsStore.get(),
+			maxParallelReviews: 3,
+		});
+		setup.bot.applySettings();
+		await setup.claude.waitForReviewCall(3);
+
+		expect(reviewingCount(setup, [7, 8, 9])).toBe(3);
+
+		setup.gate.open();
+		await setup.settle();
+	});
+
+	it('lowering the limit with 2 running → nothing is aborted; the third waits for both', async () => {
+		const setup = await queueGated({ maxParallelReviews: 2 }, [7, 8, 9]);
+		const firstGate = createGate();
+
+		setup.claude.reviewGatesByUrl.set(urlOf(7), firstGate.promise);
+		await setup.bot.tick();
+		await setup.claude.waitForReviewCall(2);
+		setup.dependencies.settingsStore.replace({
+			...setup.dependencies.settingsStore.get(),
+			maxParallelReviews: 1,
+		});
+		setup.bot.applySettings();
+		await setup.bot.tick();
+		setup.gate.open();
+		await waitUntil(() => setup.statusOf(8)?.status !== 'reviewing');
+		await letPendingJobsRun();
+
+		expect(setup.claude.abortedReviews).toEqual([]);
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+		expect(setup.statusOf(9)?.status).toBe('queued');
+
+		firstGate.open();
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(3);
+	});
+});
+
+describe('restarting a running review', () => {
+	const startGatedReview = async (overrides = {}, ignoresAbort = false) => {
+		const setup = setUp({ reviewMode: 'manual' });
+
+		setup.github.addPullRequest(7, overrides);
+		await setup.tickAndSettle();
+
+		const id = setup.statusOf(7)?.id ?? 0;
+		const gate = createGate();
+
+		setup.claude.ignoresAbort = ignoresAbort;
+		setup.claude.reviewGate = gate.promise;
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.bot.requestReview(id);
+		await setup.claude.waitForReviewCall(1);
+
+		return { ...setup, id, gate };
+	};
+
+	it('while reviewing → the run is aborted and a fresh round runs on the same commit', async () => {
+		const setup = await startGatedReview();
+
+		setup.claude.reviewGate = null;
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+
+		expect(setup.bot.restart(setup.id)).toBe('ok');
+		await setup.settle();
+
+		expect(setup.claude.abortedReviews).toEqual([urlOf(7)]);
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+		expect(
+			setup.dependencies.store.listActivity(setup.id).some(({ kind }) => kind === 'restart'),
+		).toBe(true);
+	});
+
+	it('restarting twice, then the third round fails → backoff, never "failed N times"', async () => {
+		const setup = await startGatedReview();
+
+		setup.claude.reviewOutcomes.length = 0;
+		setup.bot.restart(setup.id);
+		await setup.claude.waitForReviewCall(2);
+		setup.bot.restart(setup.id);
+		await setup.claude.waitForReviewCall(3);
+
+		expect(setup.dependencies.store.getPullRequest(setup.id)?.attemptsForHead).toBe(1);
+
+		setup.claude.reviewOutcomes.push({
+			kind: 'failed',
+			summary: 'Claude exited 1 without a result',
+		});
+		setup.gate.open();
+		await setup.settle();
+		await setup.tickAndSettle();
+
+		expect(setup.statusOf(7)?.status).not.toBe('needs_you');
+		expect(setup.statusOf(7)?.reason ?? '').not.toMatch(/failed \d times/);
+	});
+
+	it('restart while a held draft is being decided → the round is discarded and its attempt returned', async () => {
+		const setup = await startGatedReview();
+		const fetchGate = createGate();
+		const secondReviewGate = createGate();
+		const fetchesBefore = setup.github.pullRequestFetches.length;
+
+		setup.github.pullRequestFetchGate = fetchGate.promise;
+		setup.gate.open();
+		await waitUntil(() => setup.github.pullRequestFetches.length > fetchesBefore);
+		setup.github.pullRequestFetchGate = null;
+		setup.claude.reviewGate = secondReviewGate.promise;
+
+		expect(setup.bot.restart(setup.id)).toBe('ok');
+
+		fetchGate.open();
+		await setup.claude.waitForReviewCall(2);
+
+		const tracked = setup.dependencies.store.getPullRequest(setup.id);
+
+		expect(tracked?.status).toBe('reviewing');
+		expect(tracked?.attemptsForHead).toBe(1);
+		expect(tracked?.lastError).toBeNull();
+		expect(tracked?.nextEligibleAt).toBeNull();
+		expect(tracked?.pendingApproval).toBeNull();
+
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		secondReviewGate.open();
+		await setup.settle();
+	});
+
+	it('restart, then the old job throws → released, no failure or backoff recorded', async () => {
+		const setup = setUp({ reviewMode: 'manual' });
+
+		setup.github.addPullRequest(7);
+		await setup.tickAndSettle();
+
+		const id = setup.statusOf(7)?.id ?? 0;
+		const fetchGate = createGate();
+
+		setup.dependencies.store.updatePullRequest(id, {
+			lastAttemptedHead: 'head-1',
+			attemptsForHead: 1,
+		});
+		setup.github.pullRequestFetchGate = fetchGate.promise;
+		setup.github.failPullRequestFetchesWith.push(500);
+		setup.bot.requestReview(id);
+		await waitUntil(() => setup.statusOf(7)?.status === 'reviewing');
+		setup.bot.setJobsHeld(true);
+		setup.bot.restart(id);
+		fetchGate.open();
+		await setup.settle();
+
+		const tracked = setup.dependencies.store.getPullRequest(id);
+
+		expect(tracked?.status).toBe('queued');
+		expect(tracked?.lastError).toBeNull();
+		expect(tracked?.nextEligibleAt).toBeNull();
+		expect(tracked?.attemptsForHead).toBe(1);
+	});
+
+	it('clears a saved repair session, so the new round reviews from scratch', async () => {
+		const setup = await startGatedReview();
+
+		setup.dependencies.store.updatePullRequest(setup.id, {
+			repairSessionId: 'session-1',
+			repairHeadSha: 'head-1',
+			repairSavedAt: setup.clock.now,
+		});
+		setup.claude.reviewGate = null;
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.bot.restart(setup.id);
+		await setup.settle();
+
+		expect(setup.claude.repairCalls).toEqual([]);
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+	});
+
+	it('the new round starts only after the old job has settled, even if Claude is slow to die', async () => {
+		const setup = await startGatedReview({}, true);
+
+		setup.bot.restart(setup.id);
+		await setup.bot.tick();
+		await letPendingJobsRun();
+
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.gate.open();
+		await setup.claude.waitForReviewCall(2);
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+	});
+
+	it('jobs held for an update → it stays queued and the bot goes idle', async () => {
+		const setup = await startGatedReview();
+
+		setup.bot.setJobsHeld(true);
+		setup.bot.restart(setup.id);
+		await setup.settle();
+
+		expect(setup.statusOf(7)?.status).toBe('queued');
+		expect(setup.bot.isIdle()).toBe(true);
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+
+		setup.gate.open();
+		setup.bot.setJobsHeld(false);
+		await setup.settle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+	});
+
+	it('a Start manually branch → the restart counts as the click and the round runs', async () => {
+		const setup = await startGatedReview({ headRefName: 'develop', baseRefName: 'master' });
+
+		setup.claude.reviewGate = null;
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		setup.bot.restart(setup.id);
+		await setup.tickAndSettle();
+
+		expect(setup.claude.reviewCalls).toHaveLength(2);
+		expect(setup.statusOf(7)?.status).toBe('draft_ready');
+	});
+
+	it('not reviewing → refused, nothing changes', async () => {
+		const setup = setUp({ reviewMode: 'manual' });
+
+		setup.github.addPullRequest(7);
+		await setup.tickAndSettle();
+
+		expect(setup.bot.restart(setup.statusOf(7)?.id ?? 0)).toBe('not_reviewing');
+		expect(setup.bot.restart(999)).toBe('not_found');
+		expect(setup.statusOf(7)?.status).toBe('needs_review');
+	});
+
+	it('lands while the review is being posted → the posted status stays, no second review', async () => {
+		const setup = setUp({ reviewMode: 'auto', postReviews: 'auto' });
+		const submitGate = createGate();
+
+		setup.github.addPullRequest(7);
+		setup.github.submitGate = submitGate.promise;
+		setup.claude.reviewOutcomes.push(draftedFor('head-1', 'comment'));
+		await setup.bot.tick();
+		await waitUntil(() => setup.github.submitCalls === 1);
+
+		expect(setup.bot.restart(setup.statusOf(7)?.id ?? 0)).toBe('ok');
+
+		submitGate.open();
+		await setup.settle();
+		await setup.tickAndSettle();
+
+		expect(setup.github.submissions).toHaveLength(1);
+		expect(setup.claude.reviewCalls).toHaveLength(1);
+		expect(setup.statusOf(7)?.status).toBe('waiting_on_author');
 	});
 });

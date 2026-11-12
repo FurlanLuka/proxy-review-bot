@@ -22,7 +22,6 @@ import { syncPullRequests } from './sync.js';
 const READINESS_INTERVAL_MS = 10 * 60_000;
 const PAUSED_FLAG = 'is_paused';
 const USAGE_LIMIT_FLAG = 'usage_limited_until';
-const MAX_PARALLEL_REVIEWS = 3;
 
 export interface Bot {
 	tick(): Promise<void>;
@@ -31,6 +30,8 @@ export interface Bot {
 	getHistory(): HistoryEntry[];
 	requestReview(id: number): ActionResult;
 	retry(id: number): ActionResult;
+	/** Aborts a running review and queues a fresh round on the same commit; not counted as a failure. */
+	restart(id: number): ActionResult;
 	stop(id: number): ActionResult;
 	approve(id: number): Promise<ActionResult>;
 	getDraft(id: number): HeldDraft | 'not_found' | 'no_draft';
@@ -43,6 +44,8 @@ export interface Bot {
 	isIdle(): boolean;
 	/** Held jobs and posts never start, so an update waits for running ones without new ones racing in. */
 	setJobsHeld(isHeld: boolean): void;
+	/** Settings changed: a raised review limit starts queued reviews now, not on the next tick. */
+	applySettings(): void;
 }
 
 interface ReplyProgress {
@@ -205,7 +208,7 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 	};
 
 	const startQueuedReviews = (viewerLogin: string): void => {
-		const freeSlots = MAX_PARALLEL_REVIEWS - reviewingIds.size;
+		const freeSlots = settingsStore.get().maxParallelReviews - reviewingIds.size;
 
 		for (const tracked of findQueued().slice(0, Math.max(0, freeSlots))) {
 			startReviewJob(tracked, viewerLogin);
@@ -359,6 +362,36 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 
 			return result;
 		},
+		restart: (id) => {
+			const tracked = store.getPullRequest(id);
+
+			if (tracked === null) {
+				return 'not_found';
+			}
+
+			if (tracked.status !== 'reviewing') {
+				return 'not_reviewing';
+			}
+
+			store.updatePullRequest(id, {
+				status: 'queued',
+				lastError: null,
+				nextEligibleAt: null,
+				pendingApproval: null,
+				...CLEARED_REPAIR_SESSION,
+				updatedAt: now(),
+			});
+			store.recordActivity(id, 'restart', {});
+			logger.info('pull_request_manual_action', {
+				id,
+				from: tracked.status,
+				to: 'queued',
+				reason: 'restart',
+			});
+			abortUnwantedReviews();
+
+			return 'ok';
+		},
 		stop: (id) =>
 			applyManualAction(id, {
 				status: 'stopped',
@@ -399,5 +432,6 @@ export const createBot = (dependencies: BotDependencies): Bot => {
 				startQueuedReviewsNow();
 			}
 		},
+		applySettings: startQueuedReviewsNow,
 	};
 };

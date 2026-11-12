@@ -18,21 +18,27 @@ export interface RunCommandParams {
 	timeoutMs?: number;
 	onStdoutLine?: (line: string) => void;
 	signal?: AbortSignal;
+	/** How long a SIGTERMed group gets before SIGKILL: a hung process must not hold its slot forever */
+	killGraceMs?: number;
 }
 
 export type RunCommand = (params: RunCommandParams) => Promise<CommandResult>;
 
 const DEFAULT_TIMEOUT_MS = 60_000;
+const KILL_GRACE_MS = 10_000;
 
 const runningProcessIds = new Set<number>();
 
-const killProcessGroup = (processId: number | undefined): void => {
+const killProcessGroup = (
+	processId: number | undefined,
+	signal: NodeJS.Signals = 'SIGTERM',
+): void => {
 	if (processId === undefined) {
 		return;
 	}
 
 	try {
-		process.kill(-processId, 'SIGTERM');
+		process.kill(-processId, signal);
 	} catch {
 		// The group already exited.
 	}
@@ -53,6 +59,7 @@ export const runCommand: RunCommand = ({
 	timeoutMs,
 	onStdoutLine,
 	signal,
+	killGraceMs,
 }) => {
 	const startedAt = performance.now();
 
@@ -72,11 +79,29 @@ export const runCommand: RunCommand = ({
 		const stdoutChunks: Buffer[] = [];
 		const stderrChunks: Buffer[] = [];
 		const state = { isTimedOut: false };
+		const forceKill: { timer: ReturnType<typeof setTimeout> | null } = { timer: null };
+
+		const terminate = (): void => {
+			killProcessGroup(child.pid);
+			forceKill.timer ??= setTimeout(
+				() => killProcessGroup(child.pid, 'SIGKILL'),
+				killGraceMs ?? KILL_GRACE_MS,
+			);
+		};
+
+		const stopTimers = (): void => {
+			clearTimeout(timer);
+
+			if (forceKill.timer !== null) {
+				clearTimeout(forceKill.timer);
+			}
+		};
+
 		const timer = setTimeout(() => {
 			state.isTimedOut = true;
-			killProcessGroup(child.pid);
+			terminate();
 		}, timeoutMs ?? DEFAULT_TIMEOUT_MS);
-		const abort = (): void => killProcessGroup(child.pid);
+		const abort = terminate;
 
 		signal?.addEventListener('abort', abort, { once: true });
 
@@ -112,13 +137,13 @@ export const runCommand: RunCommand = ({
 		});
 		child.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
 		child.on('error', (error) => {
-			clearTimeout(timer);
+			stopTimers();
 			signal?.removeEventListener('abort', abort);
 			runningProcessIds.delete(processId ?? -1);
 			reject(error);
 		});
 		child.on('close', (exitCode) => {
-			clearTimeout(timer);
+			stopTimers();
 			signal?.removeEventListener('abort', abort);
 
 			const remainder = lineBuffer.pending + decoder.end();

@@ -4,6 +4,8 @@ public struct BotSettings: Codable, Equatable, Sendable {
     public var autoApprove: AutoApproveMode
     public var smallPullRequestLineLimit: Int
     public var maxRounds: Int
+    public var maxParallelReviews: Int?
+    public var reviewInstructions: String?
     public var pollIntervalSeconds: Int
     public var answerQuestions: Bool
     public var watch: [String]

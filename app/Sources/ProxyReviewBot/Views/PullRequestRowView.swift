@@ -30,6 +30,10 @@ struct PullRequestRowView: View {
                 progressSection(progress)
             }
 
+            if pullRequest.status == .reviewing {
+                stallNotice
+            }
+
             if isConfirmingStop {
                 stopConfirmation
             } else {
@@ -161,6 +165,28 @@ struct PullRequestRowView: View {
         .font(MenuStyle.metaFont.monospacedDigit().weight(.medium))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(pullRequest.additions) additions, \(pullRequest.deletions) deletions")
+    }
+
+    private var stallNotice: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            if let text = ReviewStall.text(for: pullRequest, now: context.date) {
+                HStack(spacing: 8) {
+                    Label(text, systemImage: "exclamationmark.triangle")
+                        .font(MenuStyle.metaFont)
+                        .foregroundStyle(Palette.peach.ink)
+
+                    Spacer(minLength: 4)
+
+                    Button {
+                        model.restart(pullRequest)
+                    } label: {
+                        Label("Restart", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(PillButtonStyle(isProminent: true, tint: Palette.peach))
+                    .help("Stop this run and start the review again")
+                }
+            }
+        }
     }
 
     @ViewBuilder

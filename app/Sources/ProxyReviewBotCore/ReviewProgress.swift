@@ -42,6 +42,7 @@ public struct ReviewProgress: Codable, Equatable, Sendable {
     public var message: String?
     public var subagents: [SubagentProgress]
     public var updatedAt: Double
+    public var lastActivityAt: Double?
 
     public var finishedSubagentCount: Int {
         subagents.filter { $0.status != .running }.count

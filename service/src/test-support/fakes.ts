@@ -41,6 +41,11 @@ export interface FakeGitHub extends GitHubClient {
 	failSubmissionsWith: number[];
 	failPullRequestFetchesWith: number[];
 	pullRequestFetches: number[];
+	/** Holds `submitReview` open until it resolves */
+	submitGate: Promise<void> | null;
+	/** Holds `getPullRequest` open until it resolves */
+	pullRequestFetchGate: Promise<void> | null;
+	submitCalls: number;
 	addPullRequest(number: number, overrides?: Partial<LivePullRequest>): FakePullRequest;
 }
 
@@ -52,6 +57,9 @@ export const createFakeGitHub = (clock: { now: number }): FakeGitHub => {
 		fileComments: [],
 		replies: [],
 		failSubmissionsWith: [],
+		submitGate: null,
+		submitCalls: 0,
+		pullRequestFetchGate: null,
 		failPullRequestFetchesWith: [],
 		pullRequestFetches: [],
 		addPullRequest: (number, overrides = {}) => {
@@ -91,6 +99,10 @@ export const createFakeGitHub = (clock: { now: number }): FakeGitHub => {
 
 			fake.pullRequestFetches.push(reference.number);
 
+			if (fake.pullRequestFetchGate !== null) {
+				await fake.pullRequestFetchGate;
+			}
+
 			const failureStatus = fake.failPullRequestFetchesWith.shift();
 
 			if (failureStatus !== undefined) {
@@ -109,6 +121,12 @@ export const createFakeGitHub = (clock: { now: number }): FakeGitHub => {
 		listReviews: async (reference) => [...(pullRequests.get(reference.number)?.reviews ?? [])],
 		listReviewThreads: async (reference) => pullRequests.get(reference.number)?.threads ?? [],
 		submitReview: async (reference, submission) => {
+			fake.submitCalls += 1;
+
+			if (fake.submitGate !== null) {
+				await fake.submitGate;
+			}
+
 			const failureStatus = fake.failSubmissionsWith.shift();
 
 			if (failureStatus !== undefined) {
@@ -165,12 +183,17 @@ export interface FakeClaude extends ClaudeClient {
 	repairOutcomes: ClaudeRunOutcome<ReviewResult>[];
 	repairCalls: { sessionId: string; clonePath: string; attempt: number }[];
 	repairGate: Promise<void> | null;
+	/** Activity times reported to the bot before a repair waits on its gate */
+	repairActivity: number[];
 	abortedRepairs: number;
 	replyOutcomes: ClaudeRunOutcome<ReplyResult>[];
 	reviewCalls: string[];
 	replyPrompts: string[];
 	modelCalls: { kind: 'review' | 'repair' | 'reply'; model: string | null }[];
+	instructionCalls: { kind: 'review' | 'repair' | 'reply'; instructions: string }[];
 	reviewGate: Promise<void> | null;
+	/** An aborted review keeps waiting on its gate, like a Claude that is slow to die */
+	ignoresAbort: boolean;
 	reviewError: Error | null;
 	reviewSyncError: Error | null;
 	reviewGatesByUrl: Map<string, Promise<void>>;
@@ -195,11 +218,13 @@ export const createFakeClaude = (): FakeClaude => {
 	const runFakeReview: ClaudeClient['runReview'] = async ({
 		pullRequestUrl,
 		model,
+		instructions,
 		onProgress,
 		signal,
 	}) => {
 		fake.reviewCalls.push(pullRequestUrl);
 		fake.modelCalls.push({ kind: 'review', model });
+		fake.instructionCalls.push({ kind: 'review', instructions });
 
 		if (fake.reviewError !== null) {
 			throw fake.reviewError;
@@ -218,7 +243,9 @@ export const createFakeClaude = (): FakeClaude => {
 
 		const aborted = Promise.withResolvers<'aborted'>();
 
-		signal?.addEventListener('abort', () => aborted.resolve('aborted'), { once: true });
+		if (!fake.ignoresAbort) {
+			signal?.addEventListener('abort', () => aborted.resolve('aborted'), { once: true });
+		}
 
 		const gates = Promise.all([fake.reviewGatesByUrl.get(pullRequestUrl), fake.reviewGate]);
 
@@ -245,12 +272,15 @@ export const createFakeClaude = (): FakeClaude => {
 		repairOutcomes: [],
 		repairCalls: [],
 		repairGate: null,
+		repairActivity: [],
 		abortedRepairs: 0,
 		replyOutcomes: [],
 		reviewCalls: [],
 		replyPrompts: [],
 		modelCalls: [],
+		instructionCalls: [],
 		reviewGate: null,
+		ignoresAbort: false,
 		reviewError: null,
 		reviewSyncError: null,
 		reviewGatesByUrl: new Map(),
@@ -258,9 +288,22 @@ export const createFakeClaude = (): FakeClaude => {
 		reviewProgressLines: [],
 		replyGate: null,
 		replyError: null,
-		runRepair: async ({ sessionId, clonePath, model, attempt, signal }) => {
+		runRepair: async ({
+			sessionId,
+			clonePath,
+			model,
+			instructions,
+			attempt,
+			signal,
+			onActivity,
+		}) => {
 			fake.repairCalls.push({ sessionId, clonePath, attempt });
 			fake.modelCalls.push({ kind: 'repair', model });
+			fake.instructionCalls.push({ kind: 'repair', instructions });
+
+			for (const at of fake.repairActivity) {
+				onActivity?.(at);
+			}
 
 			const aborted = Promise.withResolvers<'aborted'>();
 
@@ -286,9 +329,10 @@ export const createFakeClaude = (): FakeClaude => {
 
 			return runFakeReview(params);
 		},
-		runReply: async ({ prompt, model }) => {
+		runReply: async ({ prompt, model, instructions }) => {
 			fake.replyPrompts.push(prompt);
 			fake.modelCalls.push({ kind: 'reply', model });
+			fake.instructionCalls.push({ kind: 'reply', instructions });
 			replyEntered.resolve();
 
 			if (fake.replyGate !== null) {

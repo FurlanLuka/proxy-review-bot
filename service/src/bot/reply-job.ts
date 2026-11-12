@@ -96,6 +96,7 @@ export const runNextReplyJob = async (params: ReplyJobParams): Promise<JobOutcom
 			claude.runReply({
 				clonePath,
 				model: settingsStore.get().claudeModel,
+				instructions: settingsStore.get().reviewInstructions,
 				prompt: buildReplyPrompt({
 					reference: tracked,
 					clonePath,

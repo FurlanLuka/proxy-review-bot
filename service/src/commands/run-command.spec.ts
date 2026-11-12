@@ -56,6 +56,38 @@ describe('runCommand abort', () => {
 	});
 });
 
+describe('runCommand kill escalation', () => {
+	it('a process that ignores SIGTERM → killed with SIGKILL after the grace period', async () => {
+		const abortController = new AbortController();
+		const running = runCommand({
+			command: '/bin/sh',
+			args: ['-c', "trap '' TERM; while true; do sleep 0.05; done"],
+			timeoutMs: 10_000,
+			killGraceMs: 200,
+			signal: abortController.signal,
+		});
+
+		setTimeout(() => abortController.abort(), 50);
+
+		const result = await running;
+
+		expect(result.durationMs).toBeGreaterThanOrEqual(200);
+		expect(result.durationMs).toBeLessThan(3000);
+	});
+
+	it('a timed-out process that ignores SIGTERM → killed too, and reported as timed out', async () => {
+		const result = await runCommand({
+			command: '/bin/sh',
+			args: ['-c', "trap '' TERM; while true; do sleep 0.05; done"],
+			timeoutMs: 100,
+			killGraceMs: 200,
+		});
+
+		expect(result.isTimedOut).toBe(true);
+		expect(result.durationMs).toBeLessThan(3000);
+	});
+});
+
 describe('runCommand line streaming robustness', () => {
 	it('a multi-byte character split across chunks stays intact', async () => {
 		const lines: string[] = [];

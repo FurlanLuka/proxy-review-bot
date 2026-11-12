@@ -14,7 +14,8 @@ export type ActionResult =
 	| 'not_awaiting_approval'
 	| 'no_draft'
 	| 'invalid_draft'
-	| 'own_pr';
+	| 'own_pr'
+	| 'not_reviewing';
 
 type DraftChoice =
 	| { kind: 'post'; event: ReviewEvent; draft: DraftedReviewResult }

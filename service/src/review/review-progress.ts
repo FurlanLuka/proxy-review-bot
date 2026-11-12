@@ -20,6 +20,8 @@ export interface ReviewProgress {
 	message: string | null;
 	subagents: SubagentProgress[];
 	updatedAt: number;
+	/** Last line Claude printed, subagents included: the card's stall warning reads it */
+	lastActivityAt: number;
 }
 
 const AGENT_LABELS: Record<string, string> = {
@@ -60,6 +62,7 @@ export const createReviewProgress = (
 	message,
 	subagents: [],
 	updatedAt: now,
+	lastActivityAt: now,
 });
 
 export const labelForAgentType = (agentType: string): string => {

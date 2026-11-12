@@ -85,6 +85,16 @@ struct SettingsFormView: View {
                     }
                 }
 
+                LabeledContent("Reviews at once") {
+                    HStack(spacing: 6) {
+                        Text("\(maxParallelReviews.wrappedValue)")
+                            .monospacedDigit()
+
+                        Stepper("Reviews at once", value: maxParallelReviews, in: 1...10)
+                            .labelsHidden()
+                    }
+                }
+
                 Picker("Check for PRs", selection: $settings.pollIntervalSeconds) {
                     ForEach(pollIntervalChoices, id: \.self) { seconds in
                         Text(Self.pollIntervalTitle(seconds: seconds)).tag(seconds)
@@ -96,10 +106,39 @@ struct SettingsFormView: View {
                         Text(choice.title).tag(choice.model)
                     }
                 }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Review instructions")
+
+                    TextEditor(text: reviewInstructions)
+                        .font(.body)
+                        .scrollContentBackground(.hidden)
+                        .padding(4)
+                        .frame(height: 84)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Color.primary.opacity(0.05))
+                        )
+                        .overlay(alignment: .topLeading) {
+                            if reviewInstructions.wrappedValue.isEmpty {
+                                Text(ReviewInstructions.placeholder)
+                                    .foregroundStyle(.tertiary)
+                                    .padding(.horizontal, 9)
+                                    .padding(.vertical, 4)
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                        .accessibilityLabel("Review instructions")
+
+                    Text(ReviewInstructions.counterText(for: reviewInstructions.wrappedValue))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
             } header: {
                 Text("Reviews")
             } footer: {
-                Text("Claude model is used for the main review session and replies.\nProxy's advisors use their own model.")
+                Text("Claude model and instructions apply to reviews and replies.\nProxy's advisors use their own model.")
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: true, vertical: false)
@@ -180,6 +219,22 @@ struct SettingsFormView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: true, vertical: false)
             }
+        }
+    }
+
+    private var reviewInstructions: Binding<String> {
+        Binding {
+            settings.reviewInstructions ?? ""
+        } set: { text in
+            settings.reviewInstructions = ReviewInstructions.clamped(text)
+        }
+    }
+
+    private var maxParallelReviews: Binding<Int> {
+        Binding {
+            settings.maxParallelReviews ?? 3
+        } set: { count in
+            settings.maxParallelReviews = count
         }
     }
 

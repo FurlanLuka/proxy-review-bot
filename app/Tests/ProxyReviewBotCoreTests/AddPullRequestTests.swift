@@ -38,6 +38,16 @@ final class AddPullRequestTests: XCTestCase {
         XCTAssertEqual(message(409, "own_pr", nil), "You can only comment on your own PR")
     }
 
+    func testRestartPostsToItsRouteAndARefusalReadsPlainly() throws {
+        XCTAssertEqual(ServiceAction.restart(pullRequestID: 7).path, "/prs/7/restart")
+        XCTAssertEqual(ServiceAction.restart(pullRequestID: 7).method, "POST")
+        XCTAssertNil(try ServiceAction.restart(pullRequestID: 7).encodedBody())
+        XCTAssertEqual(
+            ServiceErrorText.message(statusCode: 409, code: "not_reviewing", subject: "api #7"),
+            "api #7 isn't being reviewed anymore"
+        )
+    }
+
     func testPrNotFoundIsNotTheGenericNotTrackedMessage() {
         XCTAssertEqual(
             ServiceErrorText.message(statusCode: 404, code: "pr_not_found", subject: "that PR"),

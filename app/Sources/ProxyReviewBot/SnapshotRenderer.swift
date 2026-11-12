@@ -72,6 +72,13 @@ enum SnapshotRenderer {
                 into: directory
             )
             await render(
+                PullRequestRowView(model: model, pullRequest: sampleReviewingPullRequest(quietMinutes: 12, elapsedMinutes: 14), isProgressExpanded: false)
+                    .environmentObject(AppNavigator())
+                    .padding(12).frame(width: size.width - HomeView.padding * 2),
+                name: "stalled",
+                into: directory
+            )
+            await render(
                 Form { UninstallSection(model: model) }
                     .formStyle(.grouped)
                     .frame(width: 520, height: 130),
@@ -183,7 +190,7 @@ enum SnapshotRenderer {
         return try! JSONDecoder().decode(ReviewDraft.self, from: Data(json.utf8))
     }
 
-    private static func sampleReviewingPullRequest() -> PullRequest {
+    private static func sampleReviewingPullRequest(quietMinutes: Double = 0, elapsedMinutes: Double = 7) -> PullRequest {
         let now = Date().timeIntervalSince1970 * 1000
         let minute = 60_000.0
 
@@ -204,11 +211,12 @@ enum SnapshotRenderer {
             "id": 9999, "owner": "acme", "repo": "billing", "number": 201, "title": "Invoice export",
             "url": "https://github.com/acme/billing/pull/201", "author": "kai", "status": "reviewing",
             "rounds": 1, "maxRounds": 5, "additions": 120, "deletions": 30, "headSha": "sample",
-            "reviewStartedAt": now - 7 * minute, "updatedAt": now,
+            "reviewStartedAt": now - elapsedMinutes * minute, "updatedAt": now,
             "progress": [
                 "phase": "review",
                 "message": "Waiting on 2 advisors, then verifying findings",
                 "updatedAt": now,
+                "lastActivityAt": now - quietMinutes * minute,
                 "subagents": [
                     subagent(1, "Product", "Scope and UX of the export", "completed", finishedMinutesAgo: 4),
                     subagent(2, "Architecture", "Module boundaries for export", "completed", finishedMinutesAgo: 3),

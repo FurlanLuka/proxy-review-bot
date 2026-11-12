@@ -38,6 +38,16 @@ Rules:
 - Don't add the "🤖 review bot" line or the hidden proxy-review-bot marker; the bot adds them itself.
 - Keep it short and plain, like a colleague. Return exactly one JSON result: {"reply": "<text>"} or {"reply": null}.`;
 
+const REVIEW_INSTRUCTIONS_HEADING =
+	"The developer's own preferences for this review (tone, how to write comments, what to focus on). Follow them unless they conflict with the rules above.";
+
+/** The developer's instructions come after the bot's rules, so the headless contract always wins. */
+export const withReviewInstructions = (systemPrompt: string, instructions: string): string => {
+	return instructions === ''
+		? systemPrompt
+		: `${systemPrompt}\n\n${REVIEW_INSTRUCTIONS_HEADING}\n\n${instructions}`;
+};
+
 export const buildReviewPrompt = (pullRequestUrl: string): string => {
 	return `/proxy:pr-review ${pullRequestUrl}`;
 };

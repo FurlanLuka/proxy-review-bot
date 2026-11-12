@@ -154,6 +154,69 @@ describe('settings', () => {
 		expect(createSettingsStore(path).get().claudeModel).toBeNull();
 	});
 
+	it('defaults: three reviews at once', () => {
+		expect(DEFAULT_SETTINGS.maxParallelReviews).toBe(3);
+	});
+
+	it.each([[1], [10]])('reviews at once %p → kept', (maxParallelReviews) => {
+		const path = settingsPath();
+
+		createSettingsStore(path).replace({ ...DEFAULT_SETTINGS, maxParallelReviews });
+
+		expect(createSettingsStore(path).get().maxParallelReviews).toBe(maxParallelReviews);
+	});
+
+	it.each([[0], [11], [1.5]])('reviews at once %p → rejected', (maxParallelReviews) => {
+		expect(
+			createSettingsStore(settingsPath()).replace({ ...DEFAULT_SETTINGS, maxParallelReviews }),
+		).toBeNull();
+	});
+
+	it('an older settings file without reviews at once → 3, the other values intact', () => {
+		const path = settingsPath();
+
+		writeFileSync(path, JSON.stringify({ reviewMode: 'auto', maxRounds: 8 }));
+
+		expect(createSettingsStore(path).get()).toMatchObject({
+			reviewMode: 'auto',
+			maxRounds: 8,
+			maxParallelReviews: 3,
+		});
+	});
+
+	it('defaults: no review instructions, also for an older settings file', () => {
+		const path = settingsPath();
+
+		writeFileSync(path, JSON.stringify({ reviewMode: 'auto' }));
+
+		expect(DEFAULT_SETTINGS.reviewInstructions).toBe('');
+		expect(createSettingsStore(path).get().reviewInstructions).toBe('');
+	});
+
+	it('review instructions are trimmed; up to 4000 characters are kept, more are rejected', () => {
+		const path = settingsPath();
+		const store = createSettingsStore(path);
+
+		store.replace({ ...DEFAULT_SETTINGS, reviewInstructions: '  Be brief.\n' });
+
+		expect(createSettingsStore(path).get().reviewInstructions).toBe('Be brief.');
+		expect(
+			store.replace({ ...DEFAULT_SETTINGS, reviewInstructions: 'a'.repeat(4000) }),
+		).not.toBeNull();
+		expect(store.replace({ ...DEFAULT_SETTINGS, reviewInstructions: 'a'.repeat(4001) })).toBeNull();
+	});
+
+	it('the 4000 limit counts UTF-16 units, as the app does: 2000 emoji fit, 4000 do not', () => {
+		const store = createSettingsStore(settingsPath());
+
+		expect(
+			store.replace({ ...DEFAULT_SETTINGS, reviewInstructions: '😀'.repeat(2000) }),
+		).not.toBeNull();
+		expect(
+			store.replace({ ...DEFAULT_SETTINGS, reviewInstructions: '😀'.repeat(4000) }),
+		).toBeNull();
+	});
+
 	it('missing file → defaults', () => {
 		expect(createSettingsStore(settingsPath()).get()).toEqual(DEFAULT_SETTINGS);
 	});

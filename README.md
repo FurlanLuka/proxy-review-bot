@@ -35,7 +35,10 @@ until you click **Review**, and nothing is posted until you post it.
 ## What it's like to use
 
 PRs that request your review show up under **Ready to review**. Click **Review** and the bot starts.
-Up to three reviews run at once, and you can watch each one's advisors work through it. To review
+Up to three reviews run at once (**Reviews at once** in Settings, 1 to 10), and you can watch each
+one's advisors work through it. If Claude prints nothing for 10 minutes, the card says "No activity
+from Claude for N min" and offers **Restart**, which stops the run and starts the review again
+without counting it as a failure. To review
 a PR nobody asked you to, your own included, click **+** at the bottom of the window and paste its
 link.
 
@@ -63,7 +66,9 @@ automatically). When reviews post automatically, **Auto-approve** decides whethe
 their own too (never, always, or only for small PRs); otherwise they still wait for your click. You
 can also limit which orgs and repos it watches, and set the round limit and how often it checks.
 **Claude model** picks the model reviews and replies run on (Claude Code's default, Fable, Opus,
-Sonnet or Haiku); proxy's advisors keep their own model.
+Sonnet or Haiku); proxy's advisors keep their own model. **Review instructions** is your own note
+for every review and reply, up to 4000 characters: tone, how to word comments, what to focus on.
+It's added after the bot's own rules, so it can't switch off the read-only guards.
 
 It keeps itself up to date: it checks for a new release every 6 hours and installs it once no
 review is running, then restarts. **Updates** in Settings shows the version, has an **Update now**
@@ -142,8 +147,10 @@ reviews are posted to GitHub through `gh`. Everything else stays on your Mac:
 | Review sessions | `~/.claude/projects/`, cleaned up by Claude Code's normal retention |
 
 Review sessions contain the PR's content, which comes from its author, so treat them like the PR.
-To look inside one, run `claude --resume <sessionId>` with the id from the `repair_started` line in
-the log.
+Every review logs its session id as soon as Claude starts (`claude_session_started`), and while it
+runs a `claude_run_progress` line every 2 minutes says what it's doing and how long Claude has been
+quiet. To read a review's transcript, find it by that id:
+`find ~/.claude/projects -name '<sessionId>.jsonl'`. Replies aren't saved as sessions.
 
 ## Updating and uninstalling
 

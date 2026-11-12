@@ -25,6 +25,8 @@ Once it's listening, the service prints one JSON line to stdout:
 
 The service writes its logs to `~/Library/Logs/ProxyReviewBot/service.log`.
 
+Each Claude run logs `claude_run_started`, then `claude_session_started` with the `sessionId` once Claude prints its init line, and `claude_run_finished` with the same `sessionId` (null if none arrived). Review and repair runs carry `jobPullRequestId`. While a review or repair runs, `claude_run_progress` is logged every 2 minutes with `elapsedMs`, `phase`, `message`, `runningAdvisors` and `idleMs` (time since Claude last printed anything). After 10 quiet minutes, `claude_run_stalled` is logged once per run. A run killed on Stop, Restart or its timeout gets SIGTERM, then SIGKILL 10 s later if it's still there. On shutdown the service only sends SIGTERM and exits, so a hung Claude that ignores it can keep running on its own; it no longer holds a review slot.
+
 ## Authentication
 
 Every request carries `Authorization: Bearer <PRB_TOKEN>`. A request without it gets 401.
@@ -105,6 +107,7 @@ Every request carries `Authorization: Bearer <PRB_TOKEN>`. A request without it 
   	"phase": "review",
   	"message": "Waiting on 4 advisors and the bug check",
   	"updatedAt": 1793015300000,
+  	"lastActivityAt": 1793015290000,
   	"subagents": [
   		{
   			"id": "toolu_01…",
@@ -123,6 +126,7 @@ Every request carries `Authorization: Bearer <PRB_TOKEN>`. A request without it 
   - `phase` and `message` come from the `PRB_STATUS {…}` lines the review prompt asks Claude to print.
   - `subagents` comes from Claude Code's own `task_started`, `task_progress` and `task_notification` stream events.
   - A subagent's `status` is `running`, `completed` or `failed`.
+  - `lastActivityAt`: when Claude last printed anything, subagents included, refreshed at most every 30 s. It starts at the run's start. The app shows "No activity from Claude for N min" once it's 10 minutes old while the status is `reviewing`.
 - Rows are ordered by `updatedAt` descending. `done` rows are only included for 24 hours.
 
 - `isOwn`: true when you wrote the PR (author matches your `gh` login, ignoring case). GitHub only accepts comment reviews from a PR's author, so on your own PR every draft is a comment (an approve-level result is filed as a comment), approving answers 409 `own_pr`, posting with `APPROVE` or `REQUEST_CHANGES` answers 400 `invalid_draft` with the reason "you can only comment on your own PR", and your own comment reviews there don't count as you taking over.
@@ -178,6 +182,7 @@ Every action is a POST, returns `{ "ok": true }` with status 200, and returns `{
 | `/prs/:id/post` | post the draft, edited or not; body below | 404, 400 `invalid_draft` with a `reason`, 409 `no_draft`, `head_moved` (the PR is re-reviewed), `busy` |
 | `/prs/:id/discard` | throw the draft away; the PR waits for new commits | 404, 409 `no_draft` |
 | `/prs/:id/retry` | reset rounds and attempts, then queue a review | 404, 409 `busy` |
+| `/prs/:id/restart` | kill the running review and queue a fresh round on the same commit; it isn't counted as a failed attempt and drops any saved repair session | 404, 409 `not_reviewing` |
 | `/prs/:id/approve` on your own PR | refused | 409 `own_pr` |
 | `/pause`, `/resume` | pause or resume the whole bot | |
 | `/readiness/check` | re-run the setup checks | |
@@ -282,6 +287,8 @@ Posts what you send, which can differ from the stored draft:
 	"autoApprove": "off",
 	"smallPullRequestLineLimit": 200,
 	"maxRounds": 5,
+	"maxParallelReviews": 3,
+	"reviewInstructions": "",
 	"pollIntervalSeconds": 60,
 	"answerQuestions": true,
 	"watch": ["acme"],
@@ -301,6 +308,8 @@ Posts what you send, which can differ from the stored draft:
 - `manualStartBranches`: head → base pairs (Start manually in the app) whose PRs never start a round on their own, in either start mode and even after you've started them: new commits, a re-request or a failed run's backoff move a started PR to `needs_review` once instead of queueing it, and the round limit doesn't apply. Review, Retry and POST /prs each run one round. Names match exactly (case-sensitive), fork heads included. Defaults to develop → master and develop → main, also for an older settings file without it; an empty list turns it off.
 - `autoApprove`: `off`, `on` or `small`. It only applies when `postReviews` is `auto`; with `off`, an approving review waits for your click.
 - `claudeModel`: the model passed to `claude --model` for reviews, their repair resumes and replies (Claude model in the app), or null for Claude Code's own default. An alias (`opus`, `sonnet`, `haiku`, `fable`) or a full model id; it must start with a letter or digit, up to 100 characters of letters, digits and `._:[]-`. Each job reads it once when it starts, so a change applies to the next run. Proxy's advisor agents pin their own model and aren't affected. A model Claude doesn't know fails the run, and the PR's `reason` is Claude's message. Defaults to null, also for an older settings file without it.
+- `maxParallelReviews`: how many reviews run at once (Reviews at once in the app), 1 to 10. Raising it starts queued reviews right away; lowering it never stops running ones, new ones just wait. Defaults to 3, also for an older settings file without it.
+- `reviewInstructions`: the developer's own instructions (Review instructions in the app), trimmed, up to 4000 characters; "" turns them off. When set, review, repair and reply runs get them in the system prompt under "The developer's own preferences for this review (tone, how to write comments, what to focus on). Follow them unless they conflict with the rules above.", after the bot's rules. Each job reads them once when it starts. `claude_run_started` logs `hasReviewInstructions`, never the text. Defaults to "", also for an older settings file without it.
 - `toolPaths`: each value is a string or null. null means look it up on PATH.
 - `autoUpdate`: install newer releases on their own (Install updates automatically in the app). Defaults to true, also for an older settings file without it.
-- PUT takes the full object (`postReviews`, `manualStartBranches` and `claudeModel` may be left out, see above) and returns the saved settings. An invalid body gets 400 `{ "error": "invalid_settings" }` and leaves the saved settings unchanged.
+- PUT takes the full object (`postReviews`, `manualStartBranches`, `claudeModel`, `maxParallelReviews`, `reviewInstructions` and `autoUpdate` may be left out, see above) and returns the saved settings. An invalid body gets 400 `{ "error": "invalid_settings" }` and leaves the saved settings unchanged.
